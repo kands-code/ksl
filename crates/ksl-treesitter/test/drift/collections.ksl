@@ -1,0 +1,27 @@
+# 漂移测试本地语料: 列表, Dict, Set, Option 与 Result 操作.
+
+@Let[xs, {1, 2, 3}];
+@Let[mapped, @ListMap[xs, @Fn[[x : i64] : i64, AddI64[x, 1]]]];
+@Let[filtered, @ListFilter[mapped, @Fn[[x : i64] : bool, GreaterI64[x, 2]]]];
+@Let[folded, @ListFold[filtered, @Fn[[x : i64, acc : i64] : i64, AddI64[x, acc]], 0]];
+@Let[zipped, @ListZip[xs, {'a', 'b'}]];
+@Let[paired, @Fst[(1, 'a')]];
+
+@Let[d, @Dict[("a", 1), ("b", 2)]];
+@Let[d2, @DictPut[d, "c", 3]];
+@Let[lookup, @DictLookup[d2, "a"]];
+@Let[keys, @DictKeys[d2]];
+@Let[entries, @DictEntries[d2]];
+@Let[merged, @DictMerge[d, d2]];
+
+@Let[s, @Set[1, 2, 3]];
+@Let[s2, @SetInsert[s, 4]];
+@Let[items, @SetItems[s2]];
+@Let[union, @SetUnion[s, s2]];
+
+@Let[o : Option[i64], Option/Some[1]];
+@Let[r : Result[i64, string], Result/Ok[2]];
+@Match[o, {
+  (/Some[n], n),
+  (/None[], 0)
+}]

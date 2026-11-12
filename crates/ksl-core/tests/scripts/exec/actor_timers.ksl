@@ -1,0 +1,51 @@
+# @value {7, 1, 1}
+# 定时消息: 延迟投递, 目标已终止, 取消后不投递.
+@Block[
+  @Let[delayed, @Block[
+    @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[n], n),
+        (/None[], 0)
+      }]]],
+    @Let[p, @Spawn[1u, worker]],
+    @Let[timer, @SetTimer[p, 0u, 7, 10U]],
+    @Match[@Join[p], { (/Ok[v], v), (/Err[e], -1) }]
+  ]],
+
+  @Let[dead_none, @Block[
+    @Let[worker, @Handler[[self : Pid[i64, i64]] : i64, 1]],
+    @Let[p, @Spawn[1u, worker]],
+    @Let[joined, @Join[p]],
+    @Match[@SetTimer[p, 0u, 2, 10U], {
+      (/Some[timer], 0),
+      (/None[], 1)
+    }]
+  ]],
+
+  @Let[cancel_ok, @Block[
+    @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[n], n),
+        (/None[], 0)
+      }]]],
+    @Let[waiter, @Handler[[self : Pid[i64, i64]] : i64,
+      @Block[@Sleep[30U], 1]]],
+    @Let[p, @Spawn[1u, worker]],
+    @Let[timer, @SetTimer[p, 0u, 7, 20U]],
+    @Let[cancelled, @Match[timer, {
+      (/Some[id], @CancelTimer[id]),
+      (/None[], false)
+    }]],
+    @Let[again, @Match[timer, {
+      (/Some[id], @CancelTimer[id]),
+      (/None[], false)
+    }]],
+    @Let[w, @Spawn[1u, waiter]],
+    @Let[waited, @Join[w]],
+    @Let[still, @Send[p, 0u, 5]],
+    @Let[killed, @Kill[p]],
+    @If[And[cancelled, And[Not[again], still]], 1, 0]
+  ]],
+
+  {delayed, dead_none, cancel_ok}
+]

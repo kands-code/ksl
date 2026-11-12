@@ -1,0 +1,106 @@
+================================================================================
+顶层绑定与调用
+================================================================================
+
+@Let[x : i64, AddI64[x, 1]];
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (special_form
+    (let_form
+      (binding_target
+        name: (identifier)
+        type: (type_name))
+      (call
+        function: (identifier)
+        (identifier)
+        (number
+          (integer))))))
+
+================================================================================
+模式匹配
+================================================================================
+
+@Match[v, {(/Some[x], x), (Shape/Circle[r], r)}];
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (special_form
+    (match_form
+      (identifier)
+      (match_arm
+        (unqualified_pattern
+          variant: (identifier)
+          (pattern_field
+            (identifier)))
+        (identifier))
+      (match_arm
+        (qualified_pattern
+          qualifier: (identifier)
+          variant: (identifier)
+          (pattern_field
+            (identifier)))
+        (identifier)))))
+
+================================================================================
+格式化字符串
+================================================================================
+
+Print[f"值={x}\n"];
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (call
+    function: (identifier)
+    (fstring)))
+
+================================================================================
+原始字符串
+================================================================================
+
+Print[r##"a"#b"##];
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (call
+    function: (identifier)
+    (raw_string)))
+
+================================================================================
+Actor 监视与定时形式
+================================================================================
+
+@Monitor[p];
+@Unmonitor[id];
+@PidSerial[p];
+@SetTimer[p, 0u, 1, 10];
+@CancelTimer[id];
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (special_form
+    (monitor_form
+      (identifier)))
+  (special_form
+    (unmonitor_form
+      (identifier)))
+  (special_form
+    (pid_serial_form
+      (identifier)))
+  (special_form
+    (set_timer_form
+      (identifier)
+      (number
+        (u8_integer))
+      (number
+        (integer))
+      (number
+        (integer))))
+  (special_form
+    (cancel_timer_form
+      (identifier))))

@@ -1,0 +1,7 @@
+# @error E0301
+# 最后一个信箱必须是 Pair[u64, ExitReason].
+@Let[bad, @Handler[[self : Pid[i64, i64]] : i64,
+  @Match[@Monitor[self], {
+    (/Some[id], id),
+    (/None[], 0)
+  }]]];

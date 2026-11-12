@@ -1,0 +1,71 @@
+# Actor 服务: 命名注册, 请求回复与监视重启.
+#
+# counter 持有计数状态, 客户端通过消息携带自己的 Pid 收取回复.
+# supervisor 监视 worker 的每次正常结束, 重启到第三次后返回结果.
+
+@Data[Counter, {
+  Add[i64],
+  Query[Pid[i64, i64]]
+}];
+
+@Let[counter, @Handler[[self : Pid[Counter, i64], total : i64] : i64,
+  @Match[@Receive[0u, Option/None[]], {
+    (/Some[message], @Match[message, {
+      (/Add[n], @Continue[AddI64[total, n]]),
+      (/Query[client], @Block[
+        @Let[sent, @Send[client, 0u, total]],
+        @Continue[total]
+      ])
+    }]),
+    (/None[], total)
+  }]]];
+
+@Let[client, @Handler[[self : Pid[i64, i64], server : Pid[Counter, i64]] : i64,
+  @Block[
+    @Let[_a, @Send[server, 0u, Counter/Add[5]]],
+    @Let[_b, @Send[server, 0u, Counter/Add[7]]],
+    @Let[_c, @Send[server, 0u, Counter/Query[self]]],
+    @Match[@Receive[0u, Option/None[]], {
+      (/Some[total], total),
+      (/None[], -1)
+    }]
+  ]]];
+
+@Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64, n]];
+
+# supervisor 只有控制信箱; 0 号既是唯一信箱, 也是最后一个.
+@Let[supervisor, @Handler[
+  [self : Pid[Pair[u64, ExitReason], i64], attempt : i64] : i64,
+  @Block[
+    @Let[child, @Spawn[1u, worker, MulI64[attempt, 14]]],
+    @Let[mon, @Monitor[child]],
+    @Match[mon, {
+      (/Some[_id], @Match[@Receive[0u, Option/None[]], {
+        (/Some[notice], @Match[@Snd[notice], {
+          (/Halted[], @Block[
+            @Let[result, @Match[@Join[child], { (/Ok[v], v), (/Err[_], -1) }]],
+            @If[EqualI64[attempt, 3], result, @Continue[AddI64[attempt, 1]]]
+          ]),
+          (_, -2)
+        }]),
+        (/None[], -3)
+      }]),
+      (/None[], -4)
+    }]
+  ]]];
+
+@Block[
+  @Let[server, @Spawn[1u, counter, 0]],
+  @Let[registered, @Register["counter", server]],
+  @Let[found : Option[Pid[Counter, i64]], @WhereIs["counter"]],
+  @Let[counter_result, @Match[found, {
+    (/Some[target], @Block[
+      @Let[worker, @Spawn[1u, client, target]],
+      @Match[@Join[worker], { (/Ok[v], v), (/Err[_], -1) }]
+    ]),
+    (/None[], -2)
+  }]],
+  @Let[supervisor_pid, @Spawn[1u, supervisor, 1]],
+  @Let[supervised, @Match[@Join[supervisor_pid], { (/Ok[v], v), (/Err[_], -1) }]],
+  Print[f"registered={registered} counter={counter_result} supervised={supervised}"]
+]

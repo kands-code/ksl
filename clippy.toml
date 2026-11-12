@@ -1,0 +1,6 @@
+# clippy 检查配置.
+#
+# 测试遵循最小原则, 测试代码中允许使用 panic 类便捷操作,
+# 不为测试单独设计错误处理路径.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

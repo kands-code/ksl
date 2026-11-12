@@ -1,0 +1,38 @@
+# @value "a|b||c/abc/a/b/a-b-c/x|x  |  x/STRASSEäöü/yes/hé/3U/abc/err/0U/1U/abc/x"
+# 字符串拆分, 行/词处理, 大小写, 前后缀, UTF-8 编解码与字面量边界.
+@Let[base, @Block[
+  @Let[split, StringJoin[@ListRiffle[StringSplit["a,b,,c", ","], "|", 1U]]],
+  @Let[noop, StringJoin[StringSplit["abc", ""]]],
+  @Let[lines, StringJoin[@ListRiffle[StringLines["a\r\nb\n"], "/", 1U]]],
+  @Let[words, StringJoin[@ListRiffle[StringWords["  a\tb c "], "-", 1U]]],
+  @Let[trimmed, StringJoin[{
+    StringTrim["  x  "],
+    "|",
+    StringTrimStart["  x  "],
+    "|",
+    StringTrimEnd["  x  "]
+  }]],
+  @Let[cases, StringJoin[{StringUppercase["Straße"], StringLowercase["ÄÖÜ"]}]],
+  @Let[pred, @If[
+    And[
+      StringStartsWith["hello", "he"],
+      And[StringEndsWith["hello", "lo"], StringContains["hello", "ell"]]
+    ],
+    "yes",
+    "no"
+  ]],
+  @Let[utf8, @Match[DecodeUtf8[EncodeUtf8["hé"]], { (/Ok[s], s), (/Err[e], "err") }]],
+  @Let[length, StringLength["hé😀"]],
+  @Let[length_text, f"{length}"],
+  @Let[roundtrip, CharsToString[StringToChars["abc"]]],
+  StringJoin[{
+    split, "/", noop, "/", lines, "/", words, "/", trimmed, "/",
+    cases, "/", pred, "/", utf8, "/", length_text, "/", roundtrip
+  }]
+]];
+@Let[invalid, @Match[DecodeUtf8[{255u}], { (/Ok[s], "ok"), (/Err[e], "err") }]];
+@Let[empty_lines, @ListLength[StringLines[""]]];
+@Let[blank_line, @ListLength[StringLines["\n"]]];
+@Let[joined, StringJoin[{"a", "b", "c"}]];
+@Let[trim_ws, StringTrim[" \t x \n"]];
+StringJoin[{base, "/", invalid, "/", f"{empty_lines}", "/", f"{blank_line}", "/", joined, "/", trim_ws}]

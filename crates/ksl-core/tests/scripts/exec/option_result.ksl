@@ -1,0 +1,34 @@
+# @value (64, (6, (42, ("err", (true, (-1, (2, (1, (true, (true, (true, 7)))))))))))
+@Let[o : Option[i64], Option/Some[7]];
+@Let[n : Option[i64], Option/None[]];
+@Let[m, @OptionMap[o, @Fn[[x : i64] : i64, MulI64[x, 2]]]];
+@Let[b, @OptionAndThen[o,
+  @Fn[[x : i64] : Option[i64], Option/Some[AddI64[x, 1]]]]];
+@Let[got, @OptionGet[m, 0]];
+@Let[got2, @OptionGet[b, 0]];
+@Let[got3, @OptionGet[n, 42]];
+@Let[r : Result[i64, string], Result/Ok[5]];
+@Let[rm, @ResultMap[r, @Fn[[x : i64] : i64, AddI64[x, 1]]]];
+@Let[ok, @ResultGet[rm, 0]];
+@Let[parsed, ParseI64["42"]];
+@Let[parsed_ok, @Match[parsed, {(/Ok[x], x), (/Err[e], -1)}]];
+@Let[bad, ParseI64["oops"]];
+@Let[bad_text, @Match[bad, {(/Ok[x], "ok"), (/Err[e], "err")}]];
+@Let[re : Result[i64, string], Result/Err["bad"]];
+@Let[re_is, @IsErr[re]];
+@Let[re_get, @ResultGet[re, -1]];
+@Let[r2 : Result[i64, string], Result/Ok[1]];
+@Let[r2m, @ResultAndThen[r2,
+  @Fn[[x : i64] : Result[i64, string], Result/Ok[AddI64[x, 1]]]]];
+@Let[r2v, @ResultGet[r2m, 0]];
+@Let[if_option, @If[true, Option/Some[1], Option/None[]]];
+@Let[if_v, @OptionGet[if_option, 0]];
+@Let[is_some, @IsSome[o]];
+@Let[is_none, @IsNone[n]];
+@Let[is_ok, @IsOk[r]];
+@Let[lazy_default, @Block[
+  @Let[lo : Option[i64], Option/Some[3]],
+  @Let[lr : Result[i64, string], Result/Ok[4]],
+  AddI64[@OptionGet[lo, DivideI64[1, 0]], @ResultGet[lr, DivideI64[1, 0]]]
+]];
+(AddI64[AddI64[got, got2], got3], (ok, (parsed_ok, (bad_text, (re_is, (re_get, (r2v, (if_v, (is_some, (is_none, (is_ok, lazy_default)))))))))))

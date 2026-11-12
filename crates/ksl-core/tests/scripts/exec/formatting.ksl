@@ -1,0 +1,18 @@
+# @value {"x=00042", "ff", "0xff", "0x00ff", "0x000000ff", "Fn[[i64] : i64]", "named : Fn[[i64] : i64]", "AddI64 : Fn[[i64, i64] : i64]", "Handler[[Pid[i64, i64]] : i64]", "1.0", "255u", "hi", "\"hi\"", "'a'", "-0.0", "1.0"}
+@Let[x, 42];
+@Let[a, f"x={x:05}"];
+@Let[b, f"{255:x}"];
+@Let[hex, f"{255:#x}"];
+@Let[hex_zero, f"{255:#06x}"];
+@Let[hex_precision, f"{255:#.8x}"];
+@Let[anon, @Fn[[x : i64] : i64, x]];
+@Def[named, [x : i64] : i64, x];
+@Let[builtin, AddI64];
+@Let[handler, @Handler[[self : Pid[i64, i64]] : i64, 0]];
+@Let[fl, 1.0];
+@Let[u, 255u];
+@Let[s, "hi"];
+@Let[ch, 'a'];
+@Let[neg_zero, f"{-0.0:>}"];
+@Let[padded, f"{1.0:>}"];
+{a, b, hex, hex_zero, hex_precision, f"{anon}", f"{named}", f"{builtin}", f"{handler}", f"{fl}", f"{u}", f"{s}", f"{s:?}", f"{ch:?}", neg_zero, padded}

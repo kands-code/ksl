@@ -1,0 +1,233 @@
+# 任务模型: 状态, 任务, 请求, 命令与回复.
+#
+# 存储行格式为 `id|status|priority|title`, 标题不允许包含竖线.
+
+@Data[Status, {
+  Pending[],
+  Done[]
+}];
+
+@Data[Task, {
+  Item[i64, string, i64, Status]
+}];
+
+@Data[Reply, {
+  Text[string]
+}];
+
+@Data[Request, {
+  ListTasks[],
+  AddTask[string, i64],
+  CompleteTask[i64],
+  RemoveTask[i64],
+  Stats[]
+}];
+
+@Data[Command, {
+  Call[Request, Pid[Reply, string]]
+}];
+
+@Def[formatStatus, [status : Status] : string,
+  @Match[status, {
+    (/Pending[], "pending"),
+    (/Done[], "done")
+  }]];
+
+@Def[parseStatus, [text : string] : Status,
+  @If[EqualString[text, "done"], Status/Done[], Status/Pending[]]];
+
+@Def[formatLine, [task : Task] : string,
+  @Match[task, {
+    (/Item[id, title, priority, status], @Block[
+      @Let[mark, formatStatus[status]],
+      StringJoin[{f"{id}", "|", mark, "|", f"{priority}", "|", title}]
+    ])
+  }]];
+
+@Def[parseTask, [line : string] : Option[Task],
+  @Block[
+    @Let[fields, StringSplit[line, "|"]],
+    @If[EqualU64[@ListLength[fields], 4U],
+      @Block[
+        @Let[idResult, ParseI64[@ListGet[fields, 0U]]],
+        @Let[priorityResult, ParseI64[@ListGet[fields, 2U]]],
+        @Match[idResult, {
+          (Result/Ok[id], @Match[priorityResult, {
+            (Result/Ok[priority], Option/Some[Task/Item[
+              id,
+              @ListGet[fields, 3U],
+              priority,
+              parseStatus[@ListGet[fields, 1U]]
+            ]]),
+            (Result/Err[_], Option/None[])
+          }]),
+          (Result/Err[_], Option/None[])
+        }]
+      ],
+      Option/None[]
+    ]
+  ]];
+
+@Def[formatTask, [task : Task] : string,
+  @Match[task, {
+    (/Item[id, title, priority, status], @Block[
+      @Let[mark, formatStatus[status]],
+      f"{id}. [{mark}] {title} (priority={priority})"
+    ])
+  }]];
+
+@Def[formatList, [tasks : List[Task]] : string,
+  @If[EqualU64[@ListLength[tasks], 0U],
+    "no tasks",
+    @Block[
+      @Let[lines, @ListMap[tasks, @Fn[[task : Task] : string, formatTask[task]]]],
+      StringJoin[@ListRiffle[lines, "\n", 1U]]
+    ]
+  ]];
+
+@Def[nextId, [tasks : List[Task]] : i64,
+  @Block[
+    @Let[maxId, @ListFold[
+      tasks,
+      @Fn[[task : Task, acc : i64] : i64,
+        @Match[task, {
+          (/Item[id, _title, _priority, _status], @If[GreaterI64[id, acc], id, acc])
+        }]
+      ],
+      0
+    ]],
+    AddI64[maxId, 1]
+  ]];
+
+@Def[addTask, [tasks : List[Task], title : string, priority : i64] : Pair[List[Task], i64],
+  @Block[
+    @Let[id, nextId[tasks]],
+    (@ListAppend[tasks, Task/Item[id, title, priority, Status/Pending[]]], id)
+  ]];
+
+@Def[completeTask, [tasks : List[Task], id : i64] : List[Task],
+  @ListMap[tasks, @Fn[[task : Task] : Task,
+    @Match[task, {
+      (/Item[taskId, title, priority, _status],
+        @If[EqualI64[taskId, id],
+          Task/Item[taskId, title, priority, Status/Done[]],
+          task])
+    }]
+  ]]];
+
+@Def[removeTask, [tasks : List[Task], id : i64] : List[Task],
+  @ListFilter[tasks, @Fn[[task : Task] : bool,
+    @Match[task, {
+      (/Item[taskId, _title, _priority, _status], Not[EqualI64[taskId, id]])
+    }]
+  ]]];
+
+@Def[statsText, [tasks : List[Task]] : string,
+  @Block[
+    @Let[initial : Pair[i64, i64], (0, 0)],
+    @Let[counts, @ListFold[
+      tasks,
+      @Fn[[task : Task, acc : Pair[i64, i64]] : Pair[i64, i64],
+        @Match[task, {
+          (/Item[_id, _title, _priority, status], @Match[status, {
+            (/Pending[], (AddI64[@Fst[acc], 1], @Snd[acc])),
+            (/Done[], (@Fst[acc], AddI64[@Snd[acc], 1]))
+          }])
+        }]
+      ],
+      initial
+    ]],
+    @Let[pending, @Fst[counts]],
+    @Let[done, @Snd[counts]],
+    @Let[total, AddI64[pending, done]],
+    f"total={total} pending={pending} done={done}"
+  ]];
+
+@Def[formatError, [error : IOError] : string,
+  @Match[error, {
+    (IOError/NotFound[path], StringJoin[{"not found: ", path}]),
+    (IOError/PermissionDenied[path], StringJoin[{"permission denied: ", path}]),
+    (IOError/Other[message], message),
+    (_, "I/O error")
+  }]];
+
+@Def[parseId, [text : string] : Option[i64],
+  @Match[ParseI64[text], {
+    (Result/Ok[id], Option/Some[id]),
+    (Result/Err[_], Option/None[])
+  }]];
+
+@Def[parseAdd, [words : List[string]] : Option[Request],
+  @If[LessU64[@ListLength[words], 3U],
+    Option/None[],
+    @Match[parseId[@ListGet[words, 1U]], {
+      (Option/Some[priority], @Block[
+        @Let[title, StringJoin[@ListRiffle[@ListDrop[words, 2U], " ", 1U]]],
+        Option/Some[Request/AddTask[title, priority]]
+      ]),
+      (Option/None[], Option/None[])
+    }]
+  ]];
+
+@Def[parseIdRequest, [words : List[string], kind : string] : Option[Request],
+  @If[LessU64[@ListLength[words], 2U],
+    Option/None[],
+    @Match[parseId[@ListGet[words, 1U]], {
+      (Option/Some[id], Option/Some[
+        @If[EqualString[kind, "done"], Request/CompleteTask[id], Request/RemoveTask[id]]
+      ]),
+      (Option/None[], Option/None[])
+    }]
+  ]];
+
+@Def[dispatchRemove, [head : string, words : List[string]] : Option[Request],
+  @If[EqualString[head, "remove"],
+    parseIdRequest[words, "remove"],
+    Option/None[]]];
+
+@Def[dispatchDone, [head : string, words : List[string]] : Option[Request],
+  @If[EqualString[head, "done"],
+    parseIdRequest[words, "done"],
+    dispatchRemove[head, words]]];
+
+@Def[dispatchAdd, [head : string, words : List[string]] : Option[Request],
+  @If[EqualString[head, "add"],
+    parseAdd[words],
+    dispatchDone[head, words]]];
+
+@Def[dispatchStats, [head : string, words : List[string]] : Option[Request],
+  @If[EqualString[head, "stats"],
+    Option/Some[Request/Stats[]],
+    dispatchAdd[head, words]]];
+
+@Def[dispatch, [head : string, words : List[string]] : Option[Request],
+  @If[EqualString[head, "list"],
+    Option/Some[Request/ListTasks[]],
+    dispatchStats[head, words]]];
+
+@Def[parseRequest, [line : string] : Option[Request],
+  @Block[
+    @Let[words, StringWords[line]],
+    @If[EqualU64[@ListLength[words], 0U],
+      Option/None[],
+      dispatch[@ListGet[words, 0U], words]
+    ]
+  ]];
+
+@Export[
+  ^Status,
+  ^Task,
+  ^Reply,
+  ^Request,
+  ^Command,
+  formatLine,
+  parseTask,
+  formatList,
+  addTask,
+  completeTask,
+  removeTask,
+  statsText,
+  formatError,
+  parseId,
+  parseRequest
+];

@@ -1,0 +1,41 @@
+# 任务存储: 逐行文本的读写.
+
+@Use[{^Task, ^Status, parseTask, formatLine}, "model"];
+
+@Def[parseTasks, [lines : List[string], acc : List[Task]] : Result[List[Task], IOError],
+  @If[EqualU64[@ListLength[lines], 0U],
+    Result/Ok[acc],
+    @Block[
+      @Let[line, @ListGet[lines, 0U]],
+      @Match[parseTask[line], {
+        (Option/Some[task], parseTasks[@ListTail[lines], @ListAppend[acc, task]]),
+        (Option/None[], Result/Err[IOError/Other["invalid task line"]])
+      }]
+    ]]];
+
+@Def[load, [path : string] : Result[List[Task], IOError],
+  @Block[
+    @Let[empty : List[Task], {}],
+    @Match[ReadFile[path], {
+      (Result/Ok[text], @Block[
+        @Let[lines, @ListFilter[
+          StringLines[text],
+          @Fn[[line : string] : bool, Not[EqualString[line, ""]]]
+        ]],
+        parseTasks[lines, empty]
+      ]),
+      (Result/Err[error], @Match[error, {
+        (IOError/NotFound[_], Result/Ok[empty]),
+        (_, Result/Err[error])
+      }])
+    }]
+  ]];
+
+@Def[save, [path : string, tasks : List[Task]] : Result[nil, IOError],
+  @Block[
+    @Let[lines, @ListMap[tasks, @Fn[[task : Task] : string, formatLine[task]]]],
+    @Let[text, StringJoin[@ListRiffle[lines, "\n", 1U]]],
+    WriteFile[path, text]
+  ]];
+
+@Export[load, save, ^Task, ^Status];

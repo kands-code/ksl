@@ -1,0 +1,6 @@
+# 用户主动中断: 断言与三种主动中止.
+@Assert[LessI64[1, 2], "应通过"];
+@Assert[EqualBool[true, true], "布尔断言"];
+@Panic["出大事了"];
+@Todo["尚未实现"];
+@Unreachable["不该到达"];

@@ -1,0 +1,35 @@
+[package]
+name = "ksl-cli"
+description = "ksl 命令行"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ksl"
+path = "src/main.rs"
+
+[features]
+default = ["mimalloc"]
+mimalloc = ["dep:mimalloc"]
+
+[dependencies]
+crossterm = { version = "0.29", default-features = false, features = [
+  "bracketed-paste",
+  "events",
+  "windows",
+] }
+ksl-core = { version = "0.1.0", path = "../ksl-core" }
+lsp-server = "0.10"
+lsp-types = "0.97"
+mimalloc = { version = "0.1.52", features = ["v2"], optional = true }
+percent-encoding = "2"
+serde_json = "1.0.154"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"

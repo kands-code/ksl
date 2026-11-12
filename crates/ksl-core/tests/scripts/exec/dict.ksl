@@ -1,0 +1,59 @@
+# @value (0U, (5, ({"a", "b", "c"}, ({"b", "c"}, (100, ({"a", "b", "c", "1", "2", "3"}, (8, (true, 12))))))))
+# Dict 的基本读写, 遍历, 过滤, 合并, 删除与更新.
+@Let[empty_len, @Block[
+  @Let[d : Dict[string, i64], @Dict[]],
+  @DictLength[d]
+]];
+@Let[basic, @Block[
+  @Let[d0, @Dict[("a", 1), ("b", 2)]],
+  @Let[d1, @DictPut[d0, "c", 3]],
+  @Match[@DictLookup[d1, "b"], {
+    (/Some[n], AddI64[n, U64ToI64[@DictLength[d1]]]),
+    (/None[], 0)
+  }]
+]];
+@Let[entries, @Block[
+  @Let[d0, @Dict[("a", 1), ("b", 2)]],
+  @Let[d1, @DictPut[d0, "c", 3]],
+  @Let[items, @DictEntries[d1]],
+  @Let[back, @DictFromEntries[items]],
+  @ListMap[@DictEntries[back], @Fn[[entry : Pair[string, i64]] : string, @Fst[entry]]]
+]];
+@Let[filtered, @Block[
+  @Let[d, @Dict[("a", 1), ("b", 2), ("c", 3)]],
+  @Let[kept, @DictFilter[d, @Fn[[k : string, v : i64] : bool, GreaterI64[v, 1]]]],
+  @DictKeys[kept]
+]];
+@Let[default_value, @Block[
+  @Let[d, @Dict[("a", 1)]],
+  @Let[a, @DictGet[d, "a", DivideI64[1, 0]]],
+  @Let[b, @DictGet[d, "b", 99]],
+  AddI64[a, b]
+]];
+@Let[keys_values, @Block[
+  @Let[d, @Dict[("a", 1), ("b", 2), ("c", 3)]],
+  @ListConcatenate[
+    @DictKeys[d],
+    @ListMap[@DictValues[d], @Fn[[n : i64] : string, f"{n}"]]
+  ]
+]];
+@Let[merged, @Block[
+  @Let[a, @Dict[("x", 1), ("y", 2)]],
+  @Let[b, @Dict[("y", 8), ("z", 9)]],
+  @Let[m, @DictMerge[a, b]],
+  @Match[@DictLookup[m, "y"], { (/Some[n], n), (/None[], 0) }]
+]];
+@Let[removed, @Block[
+  @Let[d, @Dict[("a", 1), ("b", 2)]],
+  @Let[r, @DictRemove[d, "a"]],
+  And[@DictHas[d, "a"], Not[@DictHas[r, "a"]]]
+]];
+@Let[updated, @Block[
+  @Let[d, @Dict[("a", 1)]],
+  @Let[d1, @DictUpdate[d, "a", @Fn[[n : i64] : i64, AddI64[n, 1]], DivideI64[1, 0]]],
+  @Let[d2, @DictUpdate[d1, "b", @Fn[[n : i64] : i64, AddI64[n, 1]], 10]],
+  @Let[a, @Match[@DictLookup[d2, "a"], { (/Some[n], n), (/None[], 0) }]],
+  @Let[b, @Match[@DictLookup[d2, "b"], { (/Some[n], n), (/None[], 0) }]],
+  AddI64[a, b]
+]];
+(empty_len, (basic, (entries, (filtered, (default_value, (keys_values, (merged, (removed, updated))))))))

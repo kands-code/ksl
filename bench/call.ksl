@@ -1,0 +1,16 @@
+# 函数调用与尾递归的开销.
+#
+# `loop` 是尾递归, 续延链不增长; `work` 是非尾递归, 续延帧在堆上累积.
+# 二者合起来覆盖调用路径与续延帧分配.
+
+@Def[loop, [n : i64, acc : i64] : i64,
+  @If[LessOrEqualI64[n, 0], acc, loop[SubI64[n, 1], AddI64[acc, 1]]]];
+
+@Def[work, [n : i64] : i64,
+  @If[LessOrEqualI64[n, 0], 0, AddI64[work[SubI64[n, 1]], 1]]];
+
+@Let[sum, loop[100000, 0]];
+@Let[deep, work[10000]];
+@Let[result, AddI64[sum, deep]];
+@Let[printed, Print[f"{result}"]];
+nil

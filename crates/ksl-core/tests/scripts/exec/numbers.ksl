@@ -1,0 +1,54 @@
+# @run
+# 数值边界, u64 运算, 数学函数与递归.
+@Assert[EqualI64[DivideI64[SubI64[0, 7], 2], -4], "i64 向下取整除法"];
+@Assert[EqualI64[ShiftLeftI64[1, 64u], 0], "左移超过字宽结果为 0"];
+@Assert[EqualI64[ShiftRightI64[1, 64u], 0], "逻辑右移超过字宽结果为 0"];
+@Assert[EqualU8[AddU8[49u, 1u], 50u], "u8 加法"];
+
+@Assert[EqualU64[AddU64[1U, 2U], 3U], "u64 加法"];
+@Assert[EqualU64[SubU64[3U, 1U], 2U], "u64 减法"];
+@Assert[EqualU64[MulU64[2U, 3U], 6U], "u64 乘法"];
+@Assert[EqualU64[DivideU64[7U, 2U], 3U], "u64 向下取整除法"];
+@Assert[EqualU64[ModuloU64[7U, 2U], 1U], "u64 取模"];
+@Assert[EqualBool[EqualU64[1U, 1U], true], "u64 相等"];
+@Assert[EqualU64[U8ToU64[1u], 1U], "u8 转 u64"];
+@Assert[EqualI64[U64ToI64[2U], 2], "u64 转 i64"];
+@Assert[EqualF64[U64ToF64[3U], 3.0], "u64 转 f64"];
+
+@Assert[EqualI64[AbsI64[-5], 5], "i64 绝对值"];
+@Assert[EqualF64[AbsF64[-2.5], 2.5], "f64 绝对值"];
+@Assert[EqualF64[Power[2.0, 10.0], 1024.0], "幂运算"];
+@Assert[EqualF64[Power[4.0, 0.5], 2.0], "小数指数"];
+@Assert[EqualF64[Sqrt[9.0], 3.0], "平方根"];
+@Assert[EqualF64[Sin[0.0], 0.0], "正弦"];
+@Assert[EqualF64[Cos[0.0], 1.0], "余弦"];
+@Assert[EqualF64[Tan[0.0], 0.0], "正切"];
+@Assert[EqualF64[ArcSin[0.0], 0.0], "反正弦"];
+@Assert[EqualF64[ArcCos[1.0], 0.0], "反余弦"];
+@Assert[EqualF64[ArcTan[0.0], 0.0], "反正切"];
+@Assert[EqualF64[ArcTan2[1.0, 0.0], 0.0], "双参数反正切"];
+@Assert[EqualF64[Sinh[0.0], 0.0], "双曲正弦"];
+@Assert[EqualF64[Cosh[0.0], 1.0], "双曲余弦"];
+@Assert[EqualF64[Tanh[0.0], 0.0], "双曲正切"];
+@Assert[EqualF64[ArcSinh[0.0], 0.0], "反双曲正弦"];
+@Assert[EqualF64[ArcCosh[1.0], 0.0], "反双曲余弦"];
+@Assert[EqualF64[ArcTanh[0.0], 0.0], "反双曲正切"];
+@Assert[EqualF64[ArcTan2[0.0, 1.0], 1.5707963267948966], "双参数反正切交换实参"];
+
+@Def[fact, [n : i64] : i64,
+  @If[LessOrEqualI64[n, 1], 1, MulI64[n, fact[SubI64[n, 1]]]]];
+@Def[fib, [n : i64] : i64,
+  @If[LessI64[n, 2], n, AddI64[fib[SubI64[n, 1]], fib[SubI64[n, 2]]]]];
+@Def[count, [n : i64] : i64,
+  @If[LessOrEqualI64[n, 0], 0, count[SubI64[n, 1]]]];
+@Def[sum, [n : i64] : i64,
+  @If[LessOrEqualI64[n, 0], 0, AddI64[1, sum[SubI64[n, 1]]]]];
+@Fix[
+  @Def[isEven, [n : u8] : bool, @If[EqualU8[n, 0u], true, isOdd[SubU8[n, 1u]]]],
+  @Def[isOdd, [n : u8] : bool, @If[EqualU8[n, 0u], false, isEven[SubU8[n, 1u]]]]
+];
+@Assert[EqualI64[fact[10], 3628800], "阶乘"];
+@Assert[EqualI64[fib[10], 55], "斐波那契"];
+@Assert[EqualBool[isEven[10u], true], "互递归"];
+@Assert[EqualI64[count[100000], 0], "尾递归"];
+@Assert[EqualI64[sum[100000], 100000], "非尾递归"];

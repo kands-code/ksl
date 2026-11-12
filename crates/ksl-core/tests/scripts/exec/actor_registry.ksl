@@ -1,0 +1,52 @@
+# @value (7, (true, ((true, true), true)))
+# 命名注册: 查找, 目标终止清理, 类型冲突与注销.
+@Let[basic, @Block[
+  @Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64, n]],
+  @Let[p, @Spawn[1u, worker, 7]],
+  @Let[ok, @Register["worker", p]],
+  @Let[found : Option[Pid[i64, i64]], @WhereIs["worker"]],
+  @Let[value, @Match[found, {
+    (/Some[target], @Match[@Join[target], { (/Ok[v], v), (/Err[e], -1) }]),
+    (/None[], -1)
+  }]],
+  @If[ok, value, -2]
+]];
+@Let[cleanup, @Block[
+  @Let[int_worker, @Handler[[self : Pid[i64, i64], n : i64] : i64, n]],
+  @Let[str_worker, @Handler[[self : Pid[string, i64], s : string] : i64, 1]],
+  @Let[p1, @Spawn[1u, int_worker, 1]],
+  @Let[first, @Register["cleanup_job", p1]],
+  @Let[joined, @Join[p1]],
+  @Let[after : Option[Pid[i64, i64]], @WhereIs["cleanup_job"]],
+  @Let[after_none, @Match[after, { (/Some[t], false), (/None[], true) }]],
+  @Let[p2, @Spawn[1u, str_worker, "x"]],
+  @Let[takeover, @Register["cleanup_job", p2]],
+  @Let[found : Option[Pid[string, i64]], @WhereIs["cleanup_job"]],
+  @Let[found_some, @Match[found, { (/Some[t], true), (/None[], false) }]],
+  And[first, And[after_none, And[takeover, found_some]]]
+]];
+@Let[conflict, @Block[
+  @Let[int_worker, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+    @Match[@Receive[0u, Option/None[]], {
+      (/Some[message], message),
+      (/None[], n)
+    }]]],
+  @Let[str_worker, @Handler[[self : Pid[string, i64], s : string] : i64, 1]],
+  @Let[p1, @Spawn[1u, int_worker, 1]],
+  @Let[p2, @Spawn[1u, str_worker, "x"]],
+  @Let[first, @Register["conflict_job", p1]],
+  @Let[rejected, @Register["conflict_job", p2]],
+  @Let[wrong : Option[Pid[string, i64]], @WhereIs["conflict_job"]],
+  @Let[wrong_none, @Match[wrong, { (/Some[t], false), (/None[], true) }]],
+  (And[first, Not[rejected]], wrong_none)
+]];
+@Let[unregister, @Block[
+  @Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64, n]],
+  @Let[p, @Spawn[1u, worker, 1]],
+  @Let[registered, @Register["unregister_job", p]],
+  @Let[removed, @Unregister["unregister_job"]],
+  @Let[found : Option[Pid[i64, i64]], @WhereIs["unregister_job"]],
+  @Let[gone, @Match[found, { (/Some[t], false), (/None[], true) }]],
+  And[registered, And[removed, gone]]
+]];
+(basic, (cleanup, (conflict, unregister)))

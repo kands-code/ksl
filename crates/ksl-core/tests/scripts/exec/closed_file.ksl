@@ -1,0 +1,21 @@
+# @run
+# 空文件句柄: 处于关闭态, 读写都报 IOError/InvalidHandle.
+@Let[empty : File, ClosedFile[]];
+
+@Let[read_ok, @Match[ReadLineFrom[empty], {
+  (/Ok[v], 0),
+  (/Err[e], @Match[e, {
+    (/InvalidHandle[], 1),
+    (_, 0)
+  }])
+}]];
+@Assert[EqualI64[read_ok, 1], "关闭句柄读取报 InvalidHandle"];
+
+@Let[write_ok, @Match[WriteString[empty, "内容"], {
+  (/Ok[v], 0),
+  (/Err[e], @Match[e, {
+    (/InvalidHandle[], 1),
+    (_, 0)
+  }])
+}]];
+@Assert[EqualI64[write_ok, 1], "关闭句柄写入报 InvalidHandle"];

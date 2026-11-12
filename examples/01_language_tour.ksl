@@ -1,0 +1,61 @@
+# 语言基础导览: 值, 绑定, 函数, Data, 集合与格式化输出.
+
+@Data[Order, {
+  Item[string, i64, f64]
+}];
+
+@Def[lineTotal, [order : Order] : f64,
+  @Match[order, {
+    (/Item[_name, quantity, price], MulF64[I64ToF64[quantity], price])
+  }]];
+
+@Let[orders, {
+  Order/Item["键盘", 2, 199.0],
+  Order/Item["鼠标", 1, 89.5],
+  Order/Item["显示器", 1, 1299.0]
+}];
+
+@Let[total, @ListFold[
+  orders,
+  @Fn[[order : Order, acc : f64] : f64, AddF64[acc, lineTotal[order]]],
+  0.0
+]];
+
+@Let[quantities, @ListMap[
+  orders,
+  @Fn[[order : Order] : i64,
+    @Match[order, { (/Item[_name, quantity, _price], quantity) }]
+  ]
+]];
+
+@Let[totalQuantity, @ListFold[
+  quantities,
+  @Fn[[quantity : i64, acc : i64] : i64, AddI64[acc, quantity]],
+  0
+]];
+
+@Let[names, @SetFromList[@ListMap[
+  orders,
+  @Fn[[order : Order] : string,
+    @Match[order, { (/Item[name, _quantity, _price], name) }]
+  ]
+]]];
+
+@Let[byItem, @ListFold[
+  orders,
+  @Fn[[order : Order, acc : Dict[string, i64]] : Dict[string, i64],
+    @Match[order, {
+      (/Item[name, quantity, _price], @DictPut[acc, name, quantity])
+    }]
+  ],
+  @Dict[]
+]];
+
+@Def[fact, [n : i64] : i64,
+  @If[LessOrEqualI64[n, 1], 1, MulI64[n, fact[SubI64[n, 1]]]]];
+
+@Let[keyboard, @DictGet[byItem, "键盘", 0]];
+@Let[orderCount, U64ToI64[@SetLength[names]]];
+@Let[factorial, fact[5]];
+Print[f"orders={orderCount} total={total} quantity={totalQuantity}"];
+Print[f"keyboard={keyboard} fact={factorial}"];

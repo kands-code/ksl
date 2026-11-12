@@ -1,0 +1,39 @@
+# 漂移测试本地语料: Handler, Actor 原语与监视通知.
+
+@Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+  @Block[
+    @Sleep[1U],
+    @If[EqualI64[n, 0], 42, @Halt[]]
+  ]]];
+
+@Let[supervisor, @Handler[
+  [self : Pid[i64, Pair[u64, ExitReason], i64], attempt : i64] : i64,
+  @Block[
+    @Let[child, @Spawn[1u, worker, SubI64[attempt, 1]]],
+    @Let[mon, @Monitor[child]],
+    @Match[mon, {
+      (/Some[id], @Match[@Receive[1u, Option/None[]], {
+        (/Some[notice], @Match[@Snd[notice], {
+          (/Halted[], @Match[@Join[child], { (/Ok[v], v), (/Err[e], -1) }]),
+          (/Killed[], -2),
+          (/Failed[code, message], @Continue[SubI64[attempt, 1]])
+        }]),
+        (/None[], -4)
+      }]),
+      (/None[], -5)
+    }]
+  ]]];
+
+@Block[
+  @Let[p, @Spawn[2u, supervisor, 3]],
+  @Let[detached, @SpawnDetached[1u, worker, 0]],
+  @Let[s, @Send[p, 0u, 1]],
+  @Let[k, @Kill[detached]],
+  @Let[serial, @PidSerial[p]],
+  @Let[timer, @SetTimer[p, 0u, 1, 10U]],
+  @Let[cancelled, @CancelTimer[timer]],
+  @Let[unmon, @Unmonitor[0U]],
+  @Let[joined, @Match[@Join[p], { (/Ok[v], v), (/Err[e], -6) }]],
+  @Let[out, Print[f"{joined}"]],
+  joined
+]

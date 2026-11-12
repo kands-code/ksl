@@ -1,0 +1,11 @@
+# 列表构建的开销.
+#
+# 反复 `@ListAppend` 产生新列表, 元素按值存放; 元素占用的字节数直接影响这里.
+
+@Def[build, [n : i64, acc : List[i64]] : List[i64],
+  @If[LessOrEqualI64[n, 0], acc, build[SubI64[n, 1], @ListAppend[acc, n]]]];
+
+@Let[xs, build[50000, {}]];
+@Let[result, U64ToI64[@ListLength[xs]]];
+@Let[printed, Print[f"{result}"]];
+nil

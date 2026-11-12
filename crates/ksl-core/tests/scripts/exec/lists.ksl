@@ -1,0 +1,54 @@
+# @value (((21, (true, (6, (5, 3)))), (1, 4)), ({3, 2, 1, 7, 7, 7, 1, 2, 3, 2, 2, 1, 11, 22, 1, 0, 2, 0, 3, 10, 21, 32, 0, 1, 3, 6}, ({1, 2, 3, 4}, ({1u, 2u, 3u}, ({3.0, 5.0}, ({'a', 'b', 'c'}, ({true, true}, ({2, 4, 6, 8}, {2, 4}))))))))
+# 列表基础操作, 扩展操作与分档表示下的值保持.
+@Let[ops, @Block[
+  @Let[l, {1, 2, 3, 4}],
+  @Let[a, @ListGet[l, 1U]],
+  @Let[b, @ListUpdate[l, 0U, 9]],
+  @Let[c, @ListAppend[b, 5]],
+  @Let[d, @ListLength[c]],
+  @Let[e, @ListMap[l, @Fn[[x : i64] : i64, MulI64[x, 2]]]],
+  @Let[f, @ListFilter[e, @Fn[[x : i64] : bool, GreaterI64[x, 4]]]],
+  @Let[s, @ListFold[f, @Fn[[x : i64, acc : i64] : i64, AddI64[x, acc]], 0]],
+  @Let[any, @ListAny[l, @Fn[[x : i64] : bool, GreaterI64[x, 2]]]],
+  @Let[all, @ListAll[l, @Fn[[x : i64] : bool, GreaterI64[x, 0]]]],
+  @Let[m, {1, 2, 3, 4, 5}],
+  @Let[tw, @ListTakeWhile[m, @Fn[[x : i64] : bool, LessI64[x, 3]]]],
+  @Let[dw, @ListDropWhile[m, @Fn[[x : i64] : bool, LessI64[x, 3]]]],
+  @Let[zipped, @ListZip[{1, 2}, {'a', 'b', 'c'}]],
+  @Let[first, @Fst[@ListGet[zipped, 0U]]],
+  @Let[riffled, @ListRiffle[l, 0, 2U]],
+  @Let[windowed, @ListWindow[l, 2U]],
+  @Let[origin_head, @ListGet[l, 0U]],
+  @Let[origin_len, @ListLength[l]],
+  ((AddI64[AddI64[a, U64ToI64[d]], s], (And[any, all], (AddI64[AddI64[U64ToI64[@ListLength[tw]], U64ToI64[@ListLength[dw]]], first], (U64ToI64[@ListLength[riffled]], U64ToI64[@ListLength[windowed]])))), (origin_head, U64ToI64[origin_len]))
+]];
+@Let[extensions, @Block[
+  @Let[rev, @ListReverse[{1, 2, 3}]],
+  @Let[rep, @ListRepeat[7, 3U]],
+  @Let[flat, @ListFlatten[{{1, 2}, {3}}]],
+  @Let[chunks, @ListMap[
+    @ListChunk[{1, 2, 3, 4, 5}, 2U],
+    @Fn[[xs : List[i64]] : i64, U64ToI64[@ListLength[xs]]]
+  ]],
+  @Let[zip, @ListZipWith[
+    {1, 2, 3},
+    {10, 20},
+    @Fn[[a : i64, b : i64] : i64, AddI64[a, b]]
+  ]],
+  @Let[rif, @ListRiffle[{1, 2, 3}, 0, 1U]],
+  @Let[mi, @ListMapIndexed[
+    {10, 20, 30},
+    @Fn[[i : u64, x : i64] : i64, AddI64[U64ToI64[i], x]]
+  ]],
+  @Let[prefix, @ListPrefixFold[{1, 2, 3}, AddI64, 0]],
+  @ListFlatten[{rev, rep, flat, chunks, zip, rif, mi, prefix}]
+]];
+@Let[specialized,
+  (@ListAppend[{1, 2, 3}, 4],
+   (@ListPrepend[{2u, 3u}, 1u],
+    (@ListMap[{1.5, 2.5}, @Fn[[x : f64] : f64, MulF64[x, 2.0]]],
+     (@ListConcatenate[{'a', 'b'}, {'c'}],
+      (@ListFilter[{true, false, true}, @Fn[[x : bool] : bool, x]],
+       (@ListMap[{1, 2, 3, 4}, @Fn[[x : i64] : i64, MulI64[x, 2]]],
+        @ListFilter[{1, 2, 3, 4}, @Fn[[x : i64] : bool, EqualI64[ModuloI64[x, 2], 0]]]))))))];
+(ops, (extensions, specialized))

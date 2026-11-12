@@ -1,0 +1,30 @@
+{
+  "grammars": [
+    {
+      "name": "ksl",
+      "camelcase": "Ksl",
+      "scope": "source.ksl",
+      "path": ".",
+      "file-types": ["ksl"],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "injection-regex": "^ksl$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "AGPL-3.0-or-later",
+    "description": "ksl 语言的 tree-sitter 语法",
+    "authors": [{ "name": "ksl" }]
+  },
+  "bindings": {
+    "c": true,
+    "go": false,
+    "java": false,
+    "node": false,
+    "python": false,
+    "rust": true,
+    "swift": false,
+    "zig": false
+  }
+}

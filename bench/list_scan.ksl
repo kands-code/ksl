@@ -1,0 +1,14 @@
+# 列表遍历的开销.
+#
+# 高阶操作由续延帧驱动, 每个元素都要经过一次函数调用与一次回填.
+
+@Def[build, [n : i64, acc : List[i64]] : List[i64],
+  @If[LessOrEqualI64[n, 0], acc, build[SubI64[n, 1], @ListAppend[acc, n]]]];
+
+@Let[xs, build[20000, {}]];
+@Let[doubled, @ListMap[xs, @Fn[[x : i64] : i64, MulI64[x, 2]]]];
+@Let[total, @ListFold[doubled, @Fn[[x : i64, acc : i64] : i64, AddI64[x, acc]], 0]];
+@Let[kept, @ListFilter[xs, @Fn[[x : i64] : bool, EqualI64[ModuloI64[x, 3], 0]]]];
+@Let[result, AddI64[total, U64ToI64[@ListLength[kept]]]];
+@Let[printed, Print[f"{result}"]];
+nil

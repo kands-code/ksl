@@ -1,0 +1,76 @@
+# 任务管理器的一次性命令入口.
+#
+# 从当前工作目录读写 `tasks.txt`; 首次添加任务时文件不存在也可用.
+
+@Use[{
+  ^Task,
+  formatList,
+  addTask,
+  completeTask,
+  removeTask,
+  statsText,
+  formatError,
+  parseId
+}, "lib/model"];
+@Use[{load, save}, "lib/store"];
+
+@Let[usage, "usage: ksl run main.ksl {list|stats|add <priority> <title>|done <id>|remove <id>}"];
+
+@Def[saveAndReport, [tasks : List[Task], message : string] : nil,
+  @Match[save["tasks.txt", tasks], {
+    (Result/Ok[_], Print[message]),
+    (Result/Err[error], Print[formatError[error]])
+  }]];
+
+@Def[runAdd, [args : List[string], tasks : List[Task]] : nil,
+  @If[LessU64[@ListLength[args], 3U],
+    Print["usage: add <priority> <title>"],
+    @Match[parseId[@ListGet[args, 1U]], {
+      (Option/Some[priority], @Block[
+        @Let[title, StringJoin[@ListRiffle[@ListDrop[args, 2U], " ", 1U]]],
+        @Let[added, addTask[tasks, title, priority]],
+        @Let[id, @Snd[added]],
+        saveAndReport[@Fst[added], f"added {id}"]
+      ]),
+      (Option/None[], Print["priority must be an integer"])
+    }]]];
+
+@Def[runDone, [args : List[string], tasks : List[Task]] : nil,
+  @If[LessU64[@ListLength[args], 2U],
+    Print["usage: done <id>"],
+    @Match[parseId[@ListGet[args, 1U]], {
+      (Option/Some[id], saveAndReport[completeTask[tasks, id], f"completed {id}"]),
+      (Option/None[], Print["id must be an integer"])
+    }]]];
+
+@Def[runRemove, [args : List[string], tasks : List[Task]] : nil,
+  @If[LessU64[@ListLength[args], 2U],
+    Print["usage: remove <id>"],
+    @Match[parseId[@ListGet[args, 1U]], {
+      (Option/Some[id], saveAndReport[removeTask[tasks, id], f"removed {id}"]),
+      (Option/None[], Print["id must be an integer"])
+    }]]];
+
+@Let[args, Args[]];
+
+@If[EqualU64[@ListLength[args], 0U],
+  Print[usage],
+  @Block[
+    @Let[command, @ListGet[args, 0U]],
+    @Match[load["tasks.txt"], {
+      (Result/Ok[tasks], @Block[
+        @If[EqualString[command, "list"],
+          Print[formatList[tasks]],
+          @If[EqualString[command, "stats"],
+            Print[statsText[tasks]],
+            @If[EqualString[command, "add"],
+              runAdd[args, tasks],
+              @If[EqualString[command, "done"],
+                runDone[args, tasks],
+                @If[EqualString[command, "remove"],
+                  runRemove[args, tasks],
+                  Print[usage]]]]]]
+      ]),
+      (Result/Err[error], Print[formatError[error]])
+    }]
+  ]]

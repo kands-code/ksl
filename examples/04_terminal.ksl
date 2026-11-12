@@ -1,0 +1,37 @@
+# 终端按键菜单: 方向键选择, Enter 确认, q 或 Esc 退出.
+#
+# ReadKey 每次读取时临时开启原始模式并在返回前恢复.
+# 管道运行时标准输入不是终端, 示例只打印提示后退出.
+
+@Def[menu, [selected : i64] : i64,
+  @Block[
+    @Match[ReadKey[], {
+      (Result/Ok[key], @Block[
+        PrintRaw["\u{1b}[2J\u{1b}[H"],
+        Print["任务菜单:"],
+        Print["  1. 查看任务"],
+        Print["  2. 添加任务"],
+        Print["  3. 退出"],
+        Print[f"当前选择: {selected}"],
+        @Match[key, {
+          (KeyEvent/Up[], menu[@If[EqualI64[selected, 1], 3, SubI64[selected, 1]]]),
+          (KeyEvent/Down[], menu[@If[EqualI64[selected, 3], 1, AddI64[selected, 1]]]),
+          (KeyEvent/Enter[], selected),
+          (KeyEvent/Escape[], -1),
+          (KeyEvent/Char[c], @If[Or[EqualChar[c, 'q'], EqualChar[c, 'Q']], -1, menu[selected]]),
+          (_, menu[selected])
+        }]
+      ]),
+      (Result/Err[error], @Match[error, {
+        (IOError/NotATerminal[], -2),
+        (_, -3)
+      }])
+    }]
+  ]];
+
+@Let[choice, menu[1]];
+@If[EqualI64[choice, -2],
+  Print["ReadKey 需要终端; 请在交互式终端中运行本示例."],
+  @If[EqualI64[choice, -1],
+    Print["已取消."],
+    Print[f"选择了 {choice}."]]]

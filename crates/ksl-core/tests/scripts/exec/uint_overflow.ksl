@@ -1,0 +1,2 @@
+# @error E0406
+@Let[x, AddU8[255u, 1u]];

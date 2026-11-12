@@ -1,0 +1,29 @@
+# 并发等待超时的开销.
+#
+# 主脚本一次启动大量 Actor, 每个都在 @Receive 上等待同一个超时;
+# 覆盖调度器定时堆的插入, 大量同截止时刻的到期取出与唤醒.
+
+@Let[waiter, @Handler[[self : Pid[i64, i64]] : i64,
+  @Match[@Receive[0u, Option/Some[10U]], {
+    (/Some[x], x),
+    (/None[], 1)
+  }]
+]];
+
+@Def[spawn_all, [n : i64] : List[Pid[i64, i64]],
+  @If[LessOrEqualI64[n, 0], {},
+    @Block[
+      @Let[p, @Spawn[1u, waiter]],
+      @Let[rest, spawn_all[SubI64[n, 1]]],
+      @ListPrepend[rest, p]
+    ]
+  ]
+];
+
+@Let[waiters, spawn_all[2000]];
+@Let[count, @ListFold[waiters,
+  @Fn[[p : Pid[i64, i64], acc : i64] : i64,
+    AddI64[acc, @Match[@Join[p], { (/Ok[v], v), (/Err[e], 0) }]]],
+  0]];
+@Let[printed, Print[f"{count}"]];
+nil

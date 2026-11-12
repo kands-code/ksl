@@ -1,0 +1,34 @@
+# @check
+# KeyEvent 可标注, 构造与穷尽匹配; ReadKey 的返回类型与 IOError 对齐; 列表标注可用.
+@Def[keyTag, [k : KeyEvent] : string,
+  @Match[k, {
+    (KeyEvent/Char[c], "char"),
+    (KeyEvent/Ctrl[c], "ctrl"),
+    (KeyEvent/Alt[c], "alt"),
+    (KeyEvent/F[n], "f"),
+    (KeyEvent/Enter[], "enter"),
+    (KeyEvent/Escape[], "escape"),
+    (KeyEvent/Backspace[], "backspace"),
+    (KeyEvent/Tab[], "tab"),
+    (KeyEvent/BackTab[], "backtab"),
+    (KeyEvent/Up[], "up"),
+    (KeyEvent/Down[], "down"),
+    (KeyEvent/Left[], "left"),
+    (KeyEvent/Right[], "right"),
+    (KeyEvent/Home[], "home"),
+    (KeyEvent/End[], "end"),
+    (KeyEvent/PageUp[], "pageup"),
+    (KeyEvent/PageDown[], "pagedown"),
+    (KeyEvent/Delete[], "delete"),
+    (KeyEvent/Insert[], "insert")
+  }]];
+@Let[_, keyTag[KeyEvent/Char['a']]];
+@Let[_, ReadKey[]];
+@Def[ioTag, [e : IOError] : string,
+  @Match[e, {
+    (IOError/Interrupted[], "interrupted"),
+    (_, "other")
+  }]];
+@Let[_, ioTag[IOError/Interrupted[]]];
+@Let[_xs : List[u8], {1u, 2u}];
+nil

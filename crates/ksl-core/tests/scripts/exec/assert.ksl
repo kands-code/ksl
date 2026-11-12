@@ -1,0 +1,11 @@
+# @value 1
+# 断言: 通过时继续执行, 且信息字符串不求值.
+@Def[makeMessage, [] : string,
+  @Block[
+    @Let[_, Print["不应打印"]],
+    "文本"
+  ]
+];
+@Assert[LessI64[1, 2], makeMessage[]];
+@Assert[EqualBool[true, true], "恒真"];
+1

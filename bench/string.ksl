@@ -1,0 +1,17 @@
+# 字符串操作的开销.
+#
+# 字符串是独立的连续字节形态, 与列表的存储路径不同, 用作对照.
+# 重复拼接一段文本, 再拆回字符列表并比较, 覆盖拆分, 合并与比较三条路径.
+
+@Def[repeat, [n : i64, acc : List[char], unit : List[char]] : List[char],
+  @If[LessOrEqualI64[n, 0], acc, repeat[SubI64[n, 1], @ListConcatenate[acc, unit], unit]]];
+
+@Let[source, "The quick brown fox jumps over the lazy dog, again and again."];
+@Let[chars, StringToChars[source]];
+@Let[wide, repeat[5000, {}, chars]];
+@Let[joined, CharsToString[wide]];
+@Let[again, StringToChars[joined]];
+@Let[equal, EqualString[joined, source]];
+@Let[result, U64ToI64[@ListLength[again]]];
+@Let[printed, Print[f"{result}"]];
+nil

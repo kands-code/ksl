@@ -1,0 +1,15 @@
+# 文本统计模块: 行数, 单词数与字符数.
+
+@Data[TextStats, {
+  Make[i64, i64, i64]
+}];
+
+@Let[stats, @Fn[[text : string] : TextStats,
+  @Block[
+    @Let[lineCount, U64ToI64[@ListLength[StringLines[text]]]],
+    @Let[wordCount, U64ToI64[@ListLength[StringWords[text]]]],
+    @Let[charCount, U64ToI64[StringLength[text]]],
+    TextStats/Make[lineCount, wordCount, charCount]
+  ]]];
+
+@Export[stats, ^TextStats];

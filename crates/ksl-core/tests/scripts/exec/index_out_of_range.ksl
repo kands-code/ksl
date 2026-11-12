@@ -1,0 +1,2 @@
+# @error E0412
+@Let[x, @ListGet[{1}, 5U]];

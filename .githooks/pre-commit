@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# 提交前检查 Markdown 与 TOML 的格式.
+
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+scripts/check-docs.sh

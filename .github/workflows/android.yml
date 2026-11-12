@@ -1,0 +1,112 @@
+name: Android Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: aarch64-linux-android
+  # NDK r30 是当前 LTS; API 30 (Android 11) 是本构建支持的最低版本.
+  NDK_VERSION: r30
+  ANDROID_API: 30
+  RELEASE_TAG: android-latest
+  RELEASE_TITLE: Android aarch64 构建
+
+jobs:
+  build:
+    name: aarch64-linux-android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装 Rust 与 Android 目标
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: 安装 Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: false
+
+      - name: 缓存 Cargo 与构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android-aarch64
+          env-vars: TARGET ANDROID_API NDK_VERSION
+          cache-on-failure: true
+
+      - name: 配置交叉编译工具链
+        env:
+          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          toolchain="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "ANDROID_NDK=$NDK"
+            echo "ANDROID_NDK_HOME=$NDK"
+            echo "ANDROID_NDK_ROOT=$NDK"
+            echo "ANDROID_TOOLCHAIN=$toolchain"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$toolchain/aarch64-linux-android${ANDROID_API}-clang"
+            echo "CC_aarch64_linux_android=$toolchain/aarch64-linux-android${ANDROID_API}-clang"
+            echo "CXX_aarch64_linux_android=$toolchain/aarch64-linux-android${ANDROID_API}-clang++"
+            echo "AR_aarch64_linux_android=$toolchain/llvm-ar"
+            echo "RANLIB_aarch64_linux_android=$toolchain/llvm-ranlib"
+          } >> "$GITHUB_ENV"
+
+      - name: 编译
+        # release 产物只需要 ksl 可执行文件, 不构建编辑器语法等无关 crate.
+        run: cargo build --locked -p ksl-cli --release --target "$TARGET"
+
+      - name: 去除符号表
+        # 发布产物不需要符号表, 去掉后减小下载体积.
+        run: |
+          "$ANDROID_TOOLCHAIN/llvm-strip" --strip-unneeded "target/$TARGET/release/ksl"
+
+      - name: 准备 release 产物
+        run: |
+          asset="$RUNNER_TEMP/ksl-aarch64-linux-android"
+          cp "target/$TARGET/release/ksl" "$asset"
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+
+      - name: 更新 release 与产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          notes=$(cat <<EOF
+          由 GitHub Actions 手动触发构建, 并覆盖更新本 release 的产物.
+
+          - 提交: $GITHUB_SHA
+          - 运行: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          - 目标: $TARGET (API $ANDROID_API)
+          EOF
+          )
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # release 已存在时只移动 tag 并覆盖同名产物, 不新建 release.
+            if ! gh api --method PATCH \
+              "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null; then
+              echo "::warning::无法移动 tag $RELEASE_TAG, 本次只更新 release 产物"
+            fi
+            gh release upload "$RELEASE_TAG" "$ASSET" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$notes" \
+              --latest
+          else
+            gh release create "$RELEASE_TAG" "$ASSET" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes "$notes" \
+              --latest
+          fi

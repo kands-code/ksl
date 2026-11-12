@@ -1,0 +1,23 @@
+# @value ((1, (2, (3, (42, 7)))), (1u, 2))
+# 绑定, 遮蔽, 局部定义与配对标注.
+@Let[control, @Block[
+  @Let[x, 1],
+  @Let[f, @Fn[[] : i64, x]],
+  @Let[x, 100],
+  @Let[y, @Block[@Let[x, 2], x]],
+  @Let[z, AddI64[1, 2]],
+  @Let[local_def, @Block[
+    @Def[g, [n : i64] : i64, AddI64[n, 1]],
+    g
+  ]],
+  @Let[local_fix, @Block[
+    @Fix[@Def[h, [n : i64] : i64, n]],
+    h
+  ]],
+  (f[], (y, (z, (local_def[41], local_fix[7]))))
+]];
+@Let[pair, @Block[
+  @Let[p : Pair[u8, i64], (1u, 2)],
+  p
+]];
+(control, pair)

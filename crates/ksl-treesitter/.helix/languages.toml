@@ -1,0 +1,14 @@
+# ksl 语言的 Helix 工作区配置.
+
+[language-server.ksl-lsp]
+command = "ksl"
+args = ["lsp"]
+
+[[language]]
+name = "ksl"
+scope = "source.ksl"
+injection-regex = "ksl"
+file-types = ["ksl"]
+comment-token = "#"
+language-servers = ["ksl-lsp"]
+indent = { tab-width = 2, unit = "  " }

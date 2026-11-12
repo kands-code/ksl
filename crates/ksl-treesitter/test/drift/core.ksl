@@ -1,0 +1,33 @@
+# 漂移测试本地语料: 字面量, 调用, 函数, Data 与模块声明.
+
+@Let[ints, {0, 255u, 0xffu, 0b101u, 0Xff, -12, 9223372036854775807, -9223372036854775808, +12, 0b101}];
+@Let[u64s, {0U, 18446744073709551615U, 0xffU, 0b101U}];
+@Let[floats, {3.5, +3.5, -2.5e-2, 1e3, 1E3}];
+@Let[texts, {"a\nb", r"a\nb", r##"c"d"##, f"x={1} {2:05} {{c}}", 'x', '\''}];
+@Let[变量, 1];
+@Let[__temp, 2];
+@Let[_, 3];
+
+@Let[pair : Pair[u8, i64], (1u, 2)];
+@Let[list : List[u8], {1u, 2u}];
+@Let[some, Option/Some[1]];
+@Let[call, AddI64[1, 2]];
+@Let[anon, @Fn[[x : i64] : i64, AddI64[x, 1]]];
+
+@Def[addOne, [x : i64] : i64, AddI64[x, 1]];
+@Fix[
+  @Def[isEven, [n : u8] : bool, @If[EqualU8[n, 0u], true, true]],
+  @Def[isOdd, [n : u8] : bool, @If[EqualU8[n, 0u], false, false]]
+];
+
+@Data[Shape, {Point[], Circle[f64]}];
+@Let[shape, Shape/Circle[2.0]];
+@Let[area, @Match[shape, {
+  (/Point[], 0.0),
+  (/Circle[r], r)
+}]];
+
+@Export[addOne, ^Shape];
+@Use[{AddI64, (Circle, C), ^Shape, ^(Point, P)}, "lib/a"];
+
+@Exit[0u];
