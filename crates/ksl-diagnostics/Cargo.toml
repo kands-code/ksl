@@ -1,0 +1,16 @@
+[package]
+name = "ksl-diagnostics"
+description = "ksl 错误目录与诊断渲染"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+annotate-snippets.workspace = true
+arcstr.workspace = true
+ksl-base.workspace = true
+ksl-macros.workspace = true
+
+[lints]
+workspace = true

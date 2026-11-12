@@ -1,0 +1,15 @@
+[package]
+name = "ksl-plan"
+description = "ksl 执行计划数据: 线性指令与执行视图"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arcstr.workspace = true
+ksl-base.workspace = true
+ksl-catalog.workspace = true
+
+[lints]
+workspace = true

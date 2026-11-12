@@ -1,0 +1,140 @@
+# raylib core_window_flags 示例.
+#
+# 展示窗口状态, 显示器信息, 鼠标与光标绑定.
+# F11 切换全屏, M 最大化/还原, T 置顶/取消置顶, H 显隐光标, R 恢复窗口尺寸,
+# S 把当前帧写到模块目录下的 tmp/core_window_flags.png.
+
+@Use[{
+  InitWindow, CloseWindow, WindowShouldClose, SetConfigFlags, SetTraceLogLevel,
+  SetTargetFPS, SetWindowTitle, SetWindowSize, ToggleFullscreen,
+  MaximizeWindow, RestoreWindow, IsWindowState, SetWindowState, ClearWindowState,
+  IsWindowMaximized, IsWindowResized, IsWindowFocused, IsWindowFullscreen, IsWindowReady,
+  IsKeyPressed, GetKeyPressed, GetKeyName, GetMousePosition, GetMouseDelta,
+  GetMouseWheelMoveV, SetMouseCursor, HideCursor, ShowCursor, IsCursorHidden,
+  GetRenderWidth, GetRenderHeight, GetScreenWidth, GetScreenHeight,
+  GetWindowPosition, GetWindowScaleDPI, GetMonitorCount, GetCurrentMonitor,
+  GetMonitorName, GetMonitorWidth, GetMonitorHeight, GetMonitorRefreshRate,
+  GetFPS, GetTime, BeginDrawing, EndDrawing, ClearBackground, DrawText, DrawFPS,
+  DrawLineV, DrawCircleV, DrawRectangle, DrawRectangleLinesEx, Vec2, Vec2X, Vec2Y, Rect,
+  TakeScreenshot, Fade,
+  FLAG_WINDOW_RESIZABLE, FLAG_VSYNC_HINT, FLAG_WINDOW_TOPMOST, LOG_WARNING,
+  MOUSE_CURSOR_CROSSHAIR, KEY_F11, KEY_M, KEY_T, KEY_H, KEY_R, KEY_S,
+  RAYWHITE, LIGHTGRAY, GRAY, DARKGRAY, MAROON, RED, GREEN, BLACK
+}, "raylib"];
+
+@Let[SCREEN_WIDTH, 800i32];
+@Let[SCREEN_HEIGHT, 450i32];
+@Let[FPS, 60i32];
+@Let[SHOT_DIR, JoinPath[GetModuleDirectory[], "tmp"]];
+@Let[SHOT_PATH, JoinPath[SHOT_DIR, "core_window_flags.png"]];
+
+@Def[row, [label : string, value : string, y : i32] : nil,
+  @Block[
+    DrawText[label, 45i32, y, 18i32, GRAY],
+    DrawText[value, 230i32, y, 18i32, BLACK]
+  ]];
+
+@Def[status, [text : string, x : i32, y : i32] : nil,
+  @Block[
+    DrawCircleV[Vec2[I32ToF32[x], I32ToF32[y]], 5.0f32, GREEN],
+    DrawText[text, AddI32[x, 12i32], SubI32[y, 8i32], 16i32, DARKGRAY]
+  ]];
+
+@Def[frame, [] : nil,
+  @If[WindowShouldClose[],
+    nil,
+    @Block[
+      @If[IsKeyPressed[KEY_F11], ToggleFullscreen[], nil],
+      @If[IsKeyPressed[KEY_M],
+        @If[IsWindowMaximized[], RestoreWindow[], MaximizeWindow[]],
+        nil],
+      @If[IsKeyPressed[KEY_T],
+        @If[IsWindowState[FLAG_WINDOW_TOPMOST],
+          ClearWindowState[FLAG_WINDOW_TOPMOST],
+          SetWindowState[FLAG_WINDOW_TOPMOST]],
+        nil],
+      @If[IsKeyPressed[KEY_H],
+        @If[IsCursorHidden[], ShowCursor[], HideCursor[]],
+        nil],
+      @If[IsKeyPressed[KEY_R], SetWindowSize[SCREEN_WIDTH, SCREEN_HEIGHT], nil],
+      @Let[mouse, GetMousePosition[]],
+      @Let[delta, GetMouseDelta[]],
+      @Let[wheel, GetMouseWheelMoveV[]],
+      @Let[scale, GetWindowScaleDPI[]],
+      @Let[position, GetWindowPosition[]],
+      @Let[renderWidth, GetRenderWidth[]],
+      @Let[renderHeight, GetRenderHeight[]],
+      @Let[screenWidth, GetScreenWidth[]],
+      @Let[screenHeight, GetScreenHeight[]],
+      @Let[positionX, Vec2X[position]],
+      @Let[positionY, Vec2Y[position]],
+      @Let[scaleX, Vec2X[scale]],
+      @Let[scaleY, Vec2Y[scale]],
+      @Let[mouseX, Vec2X[mouse]],
+      @Let[mouseY, Vec2Y[mouse]],
+      @Let[deltaX, Vec2X[delta]],
+      @Let[deltaY, Vec2Y[delta]],
+      @Let[wheelX, Vec2X[wheel]],
+      @Let[wheelY, Vec2Y[wheel]],
+      @Let[monitor, GetCurrentMonitor[]],
+      @Let[monitorName, GetMonitorName[monitor]],
+      @Let[monitorWidth, GetMonitorWidth[monitor]],
+      @Let[monitorHeight, GetMonitorHeight[monitor]],
+      @Let[refresh, GetMonitorRefreshRate[monitor]],
+      @Let[key, GetKeyPressed[]],
+      @Let[keyName, @If[EqualI32[key, 0i32], "-", GetKeyName[key]]],
+      @Let[fps, GetFPS[]],
+      @Let[elapsed, GetTime[]],
+      BeginDrawing[],
+      ClearBackground[RAYWHITE],
+      DrawText["window flags", 30i32, 24i32, 22i32, BLACK],
+      DrawRectangle[30i32, 70i32, 740i32, 250i32, Fade[LIGHTGRAY, 0.2f32]],
+      DrawRectangleLinesEx[Rect[30.0f32, 70.0f32, 740.0f32, 250.0f32], 1.0f32, LIGHTGRAY],
+      row["render", f"{renderWidth} x {renderHeight}", 84i32],
+      row["screen", f"{screenWidth} x {screenHeight}", 108i32],
+      row["position", f"{positionX}, {positionY}", 132i32],
+      row["dpi scale", f"{scaleX} / {scaleY}", 156i32],
+      row["monitor",
+        f"{monitorName} {monitorWidth} x {monitorHeight} @ {refresh} Hz", 180i32],
+      row["mouse", f"{mouseX}, {mouseY}", 204i32],
+      row["delta", f"{deltaX}, {deltaY}", 228i32],
+      row["wheel", f"{wheelX}, {wheelY}", 252i32],
+      row["key", keyName, 276i32],
+      row["time", f"{elapsed:.2} s", 300i32],
+      @If[IsWindowFocused[], status["focused", 45i32, 345i32], nil],
+      @If[IsWindowFullscreen[], status["fullscreen", 150i32, 345i32], nil],
+      @If[IsWindowMaximized[], status["maximized", 280i32, 345i32], nil],
+      @If[IsWindowState[FLAG_WINDOW_TOPMOST], status["topmost", 400i32, 345i32], nil],
+      @If[IsWindowResized[], status["resized", 510i32, 345i32], nil],
+      @If[IsCursorHidden[], status["cursor hidden", 630i32, 345i32], nil],
+      @If[IsCursorHidden[],
+        @Block[
+          DrawLineV[Vec2[SubF32[Vec2X[mouse], 10.0f32], Vec2Y[mouse]],
+            Vec2[AddF32[Vec2X[mouse], 10.0f32], Vec2Y[mouse]], RED],
+          DrawLineV[Vec2[Vec2X[mouse], SubF32[Vec2Y[mouse], 10.0f32]],
+            Vec2[Vec2X[mouse], AddF32[Vec2Y[mouse], 10.0f32]], RED]
+        ],
+        DrawCircleV[mouse, 4.0f32, MAROON]],
+      DrawText["F11 fullscreen   M maximize   T topmost   H cursor   R size   S screenshot",
+        30i32, 410i32, 16i32, DARKGRAY],
+      DrawFPS[700i32, 26i32],
+      EndDrawing[],
+      @If[IsKeyPressed[KEY_S], @Block[TakeScreenshot[SHOT_PATH], nil], nil],
+      frame[]
+    ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    SetConfigFlags[BitOrU32[FLAG_WINDOW_RESIZABLE, FLAG_VSYNC_HINT]],
+    SetTraceLogLevel[LOG_WARNING],
+    @Let[_, CreateDirectoryAll[SHOT_DIR]],
+    InitWindow[SCREEN_WIDTH, SCREEN_HEIGHT, "raylib [core] example - window flags"],
+    @Assert[IsWindowReady[], "窗口应已就绪"],
+    @Assert[EqualI32[GetRenderWidth[], SCREEN_WIDTH], "渲染宽度"],
+    @Assert[GreaterOrEqualI32[GetMonitorCount[], 1i32], "至少一个显示器"],
+    SetWindowTitle["raylib [core] example - window flags"],
+    SetMouseCursor[MOUSE_CURSOR_CROSSHAIR],
+    SetTargetFPS[FPS],
+    frame[],
+    CloseWindow[]
+  ]];

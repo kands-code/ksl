@@ -1,0 +1,155 @@
+# raylib shapes_double_pendulum 示例.
+#
+# 物理步进与双摆端点计算在 ksl 中完成;
+# 渲染纹理与绘制调用通过 raylib 包装层完成.
+# 固定点居中, 窗口覆盖两节摆杆的全部可达范围.
+
+# State 的字段依次为 theta1, w1, theta2, w2.
+@Data[PendulumState, {
+  State[f32, f32, f32, f32]
+}];
+
+@Use[{
+  InitWindow, CloseWindow, WindowShouldClose, BeginDrawing, EndDrawing,
+  ClearBackground, BeginTextureMode, EndTextureMode, DrawRectangle,
+  DrawCircleV, DrawLineEx, DrawRectanglePro, DrawRenderTexture, Fade,
+  Vec2, Vec2X, Vec2Y, Vec2Add, Rect,
+  LoadRenderTexture, UnloadRenderTexture, SetRenderTextureFilter,
+  GetFrameTime, SetTargetFPS, TEXTURE_FILTER_BILINEAR,
+  RAYWHITE, BLACK, RED, WHITE, ^Vector2, ^Rectangle, ^RenderTexture
+}, "raylib"];
+
+@Let[SCREEN_WIDTH, 800i32];
+@Let[SCREEN_HEIGHT, 640i32];
+@Let[FPS, 60i32];
+@Let[PIVOT, Vec2[400.0f32, 320.0f32]];
+@Let[PIVOT_RADIUS, 5.0f32];
+@Let[PIXELS_PER_METER, 100.0f32];
+@Let[ROD_METERS, 1.5f32];
+@Let[ROD_PIXELS, MulF32[ROD_METERS, PIXELS_PER_METER]];
+@Let[ROD_THICKNESS, 20.0f32];
+@Let[ROD_ORIGIN_Y, MulF32[0.5f32, ROD_THICKNESS]];
+@Let[ROD_ORIGIN, Vec2[0.0f32, ROD_ORIGIN_Y]];
+@Let[TRAIL_RADIUS, 2.0f32];
+@Let[TRAIL_THICKNESS, 3.0f32];
+@Let[TRAIL_FADE, 0.01f32];
+@Let[SIMULATION_STEPS, 30];
+@Let[G, 9.81f32];
+@Let[MASS1, 0.2f32];
+@Let[MASS2, 0.1f32];
+@Let[PI, 3.141592653589793f32];
+@Let[DEG2RAD, DivideF32[PI, 180.0f32]];
+@Let[RAD2DEG, DivideF32[180.0f32, PI]];
+@Let[RIGHT_ANGLE_DEG, 90.0f32];
+@Let[INITIAL_ANGLE_DEG, 164.0f32];
+
+@Def[pendulum_end, [length : f32, theta : f32] : Vector2,
+  Vec2[MulF32[length, SinF32[theta]], MulF32[length, CosF32[theta]]]];
+
+@Def[double_end, [l1 : f32, theta1 : f32, l2 : f32, theta2 : f32] : Vector2,
+  Vec2Add[pendulum_end[l1, theta1], pendulum_end[l2, theta2]]];
+
+@Def[rod_rect, [origin : Vector2, length : f32, thickness : f32] : Rectangle,
+  Rect[Vec2X[origin], Vec2Y[origin], length, thickness]];
+
+@Def[physics_step, [state : PendulumState, l1 : f32, l2 : f32, m1 : f32, m2 : f32,
+    step : f32] : PendulumState,
+  @Match[state, {
+    (/State[theta1, w1, theta2, w2], @Block[
+      @Let[totalMass, AddF32[m1, m2]],
+      @Let[delta, SubF32[theta1, theta2]],
+      @Let[sinDelta, SinF32[delta]],
+      @Let[cosDelta, CosF32[delta]],
+      @Let[cosDouble, CosF32[MulF32[2.0f32, delta]]],
+      @Let[w1Squared, MulF32[w1, w1]],
+      @Let[w2Squared, MulF32[w2, w2]],
+      @Let[denominator, MulF32[l1, SubF32[AddF32[MulF32[2.0f32, m1], m2],
+        MulF32[m2, cosDouble]]]],
+      @Let[a1, DivideF32[
+        SubF32[
+          SubF32[
+            NegF32[MulF32[G, MulF32[AddF32[MulF32[2.0f32, m1], m2], SinF32[theta1]]]],
+            MulF32[G, MulF32[m2, SinF32[SubF32[theta1, MulF32[2.0f32, theta2]]]]]
+          ],
+          MulF32[2.0f32, MulF32[sinDelta, MulF32[m2,
+            AddF32[MulF32[w2Squared, l2], MulF32[MulF32[w1Squared, l1], cosDelta]]]]]
+        ],
+        denominator]],
+      @Let[a2, DivideF32[
+        MulF32[2.0f32, MulF32[sinDelta,
+          AddF32[
+            AddF32[MulF32[MulF32[w1Squared, l1], totalMass],
+              MulF32[G, MulF32[totalMass, CosF32[theta1]]]],
+            MulF32[MulF32[w2Squared, l2], MulF32[m2, cosDelta]]
+          ]]],
+        MulF32[l2, SubF32[AddF32[MulF32[2.0f32, m1], m2], MulF32[m2, cosDouble]]]]],
+      @Let[stepSquared, MulF32[step, step]],
+      @Let[nextTheta1, AddF32[theta1,
+        AddF32[MulF32[w1, step], MulF32[MulF32[0.5f32, a1], stepSquared]]]],
+      @Let[nextTheta2, AddF32[theta2,
+        AddF32[MulF32[w2, step], MulF32[MulF32[0.5f32, a2], stepSquared]]]],
+      PendulumState/State[
+        nextTheta1,
+        AddF32[w1, MulF32[a1, step]],
+        nextTheta2,
+        AddF32[w2, MulF32[a2, step]]
+      ]
+    ])
+  }]];
+
+@Def[simulate, [count : i64, state : PendulumState, l1 : f32, l2 : f32, m1 : f32,
+    m2 : f32, step : f32] : PendulumState,
+  @If[EqualI64[count, 0],
+    state,
+    simulate[SubI64[count, 1], physics_step[state, l1, l2, m1, m2, step],
+      l1, l2, m1, m2, step]]];
+
+@Def[frame, [state : PendulumState, previous : Vector2,
+    target : RenderTexture] : nil,
+  @If[WindowShouldClose[],
+    nil,
+    @Block[
+      @Let[deltaTime, GetFrameTime[]],
+      @Let[step, DivideF32[deltaTime, I64ToF32[SIMULATION_STEPS]]],
+      @Let[nextState, simulate[SIMULATION_STEPS, state, ROD_METERS, ROD_METERS,
+        MASS1, MASS2, step]],
+      @Let[theta1, @DataGet[nextState, 0u8]],
+      @Let[theta2, @DataGet[nextState, 2u8]],
+      @Let[current, Vec2Add[PIVOT,
+        double_end[ROD_PIXELS, theta1, ROD_PIXELS, theta2]]],
+      BeginTextureMode[target],
+      DrawRectangle[0i32, 0i32, SCREEN_WIDTH, SCREEN_HEIGHT, Fade[BLACK, TRAIL_FADE]],
+      DrawLineEx[previous, current, TRAIL_THICKNESS, RED],
+      DrawCircleV[current, TRAIL_RADIUS, RED],
+      EndTextureMode[],
+      BeginDrawing[],
+      ClearBackground[BLACK],
+      DrawRenderTexture[target, Vec2[0.0f32, 0.0f32], WHITE],
+      @Let[firstEnd, pendulum_end[ROD_PIXELS, theta1]],
+      DrawRectanglePro[rod_rect[PIVOT, ROD_PIXELS, ROD_THICKNESS], ROD_ORIGIN,
+        SubF32[RIGHT_ANGLE_DEG, MulF32[RAD2DEG, theta1]], RAYWHITE],
+      DrawRectanglePro[rod_rect[Vec2Add[PIVOT, firstEnd], ROD_PIXELS, ROD_THICKNESS],
+        ROD_ORIGIN, SubF32[RIGHT_ANGLE_DEG, MulF32[RAD2DEG, theta2]], RAYWHITE],
+      DrawCircleV[PIVOT, PIVOT_RADIUS, RAYWHITE],
+      EndDrawing[],
+      frame[nextState, current, target]
+    ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    InitWindow[SCREEN_WIDTH, SCREEN_HEIGHT,
+      "raylib [shapes] example - double pendulum"],
+    SetTargetFPS[FPS],
+    @Let[initialAngle, MulF32[DEG2RAD, INITIAL_ANGLE_DEG]],
+    @Let[initial, Vec2Add[PIVOT,
+      double_end[ROD_PIXELS, initialAngle, ROD_PIXELS, 0.0f32]]],
+    @Match[LoadRenderTexture[SCREEN_WIDTH, SCREEN_HEIGHT], {
+      (Result/Ok[target], @Block[
+        SetRenderTextureFilter[target, TEXTURE_FILTER_BILINEAR],
+        frame[PendulumState/State[initialAngle, 0.0f32, 0.0f32, 0.0f32], initial, target],
+        UnloadRenderTexture[target]
+      ]),
+      (Result/Err[error], Print[StringJoin[{error, "\n"}]])
+    }],
+    CloseWindow[]
+  ]];

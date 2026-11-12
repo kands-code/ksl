@@ -1,0 +1,23 @@
+# 算术: 取整方向, 余数符号, IEEE 754 与取整函数.
+
+@Assert[EqualI64[DivideI64[-7, 2], -4], "向下取整除法向负无穷"];
+@Assert[EqualI64[QuotientI64[-7, 2], -3], "截断除法向零"];
+@Assert[EqualI64[RemainderI64[-7, 2], -1], "余数符号随被除数"];
+@Assert[EqualI64[ModuloI64[-7, 2], 1], "取模符号随除数"];
+
+# f64 遵循 IEEE 754, 不报运行时错误.
+@Assert[GreaterF64[DivideF64[1.0, 0.0], 1.0e300], "除零得无穷"];
+@Assert[Not[EqualF64[SqrtF64[-1.0], SqrtF64[-1.0]]], "负数开方得 NaN 且不等于自身"];
+
+# 取整: 向零截断, 向上, 向下与银行家舍入.
+@Assert[EqualI64[TruncateF64[-1.5], -1], "向零截断"];
+@Assert[EqualI64[CeilingF64[-1.5], -1], "向上取整"];
+@Assert[EqualI64[FloorF64[-1.5], -2], "向下取整"];
+@Assert[EqualI64[RoundF64[0.5], 0], "平局取偶 0.5"];
+@Assert[EqualI64[RoundF64[2.5], 2], "平局取偶 2.5"];
+
+# 数学函数. ArcTan2F64 的参数顺序为 x, y.
+@Assert[EqualF64[PowerF64[2.0, 10.0], 1024.0], "幂运算"];
+@Assert[EqualF64[SqrtF64[9.0], 3.0], "平方根"];
+@Assert[EqualF64[ArcTan2F64[1.0, 0.0], 0.0], "ArcTan2F64 参数顺序为 x, y"];
+@Assert[EqualF64[ArcTan2F64[0.0, 1.0], 1.5707963267948966], "ArcTan2F64 第一象限"];

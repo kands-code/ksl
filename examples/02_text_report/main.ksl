@@ -1,0 +1,26 @@
+# 读取命令行给出的文件, 用模块统计行数, 单词数与字符数.
+
+@Use[{stats, ^TextStats}, "lib/text_stats"];
+
+@Let[args, Args[]];
+
+@If[EqualU64[@ListLength[args], 0u64],
+  Print["usage: ksl run examples/02_text_report/main.ksl -- <path>\n"],
+  @Block[
+    @Let[path, @ListGet[args, 0u64]],
+    @Match[ReadFile[path], {
+      (/Ok[text], @Block[
+        @Let[report, stats[text]],
+        @Match[report, {
+          (TextStats/Make[lines, words, chars],
+            Print[f"{path}: {lines} lines, {words} words, {chars} chars\n"])
+        }]
+      ]),
+      (/Err[error], @Match[error, {
+        (FileError/NotFound[p], Print[f"not found: {p}\n"]),
+        (FileError/PermissionDenied[p], Print[f"permission denied: {p}\n"]),
+        (_, Print["read failed\n"])
+      }])
+    }]
+  ]
+]

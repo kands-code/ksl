@@ -1,0 +1,32 @@
+# 延迟投递的开销.
+#
+# 服务 Actor 等待 20000 条延迟消息.
+# 投递 Actor 逐条注册同截止时刻的定时消息.
+
+# @result 0
+
+@Let[server, @Handler[[self : Pid[i64, i64], remaining : i64] : i64,
+  @If[EqualI64[remaining, 0], 0,
+    @Match[@Receive[0u8, Option/None[]], {
+      (/Some[_], @Continue[SubI64[remaining, 1]]),
+      (/None[], -1)
+    }]
+  ]]];
+
+@Let[armer, @Handler[
+  [self : Pid[nil, nil], remaining : i64, target : Pid[i64, i64]] : nil,
+  @If[LessOrEqualI64[remaining, 0], nil,
+    @Block[
+      @Let[_, @SetTimer[target, 0u8, 1, 1u64]],
+      @Continue[SubI64[remaining, 1], target]
+    ]
+  ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[service, @Spawn[server, 20000]],
+    @Let[arming, @Spawn[armer, 20000, service]],
+    @Let[_, @Join[arming]],
+    @Let[result, @ResultGet[@Join[service], -1]],
+    Print[f"{result}\n"]
+  ]];

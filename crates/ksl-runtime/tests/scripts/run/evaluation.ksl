@@ -1,0 +1,52 @@
+# 求值语义: 闭包捕获, 立即应用, 分支惰性与断言信息惰性.
+
+# 闭包捕获与块作用域.
+@Let[x, 1];
+@Let[f, @Fn[[] : i64, x]];
+@Let[x, 100];
+@Assert[EqualI64[f[], 1], "闭包捕获定义时的绑定"];
+@Assert[EqualI64[@Block[@Let[x, 2], x], 2], "块尾表达式取值"];
+@Assert[EqualI64[x, 100], "块内遮蔽不改变外层绑定"];
+
+@Let[local_def, @Block[
+  @Def[g, [n : i64] : i64, AddI64[n, 1]],
+  g
+]];
+@Assert[EqualI64[local_def[41], 42], "块内定义函数可见"];
+
+@Let[local_fix, @Block[
+  @Fix[@Def[h, [n : i64] : i64, n]],
+  h
+]];
+@Assert[EqualI64[local_fix[7], 7], "块内修正函数可见"];
+
+# 立即应用与返回函数.
+@Assert[EqualI64[@Fn[[x : i64] : i64, AddI64[x, 1]][5], 6], "立即应用"];
+@Assert[
+  EqualI64[@Fn[[x : i64] : Fn[[i64] : i64], @Fn[[y : i64] : i64, AddI64[x, y]]][3][4], 7],
+  "返回函数再应用"
+];
+@Assert[EqualI64[AddI64[1, @Fn[[x : i64] : i64, MulI64[x, 2]][3]], 7], "实参位置的闭包"];
+
+# 分支只求值命中的条件与值; 断言信息同样惰性.
+@Let[hit, EqualI64[1, 1]];
+@Let[miss, EqualI64[1, 0]];
+@Assert[EqualI64[@Which[{(hit, 10), (hit, 20)}, 30], 10], "多个分支命中时取第一个"];
+@Assert[EqualI64[@Which[{(miss, 10), (hit, 20)}, 30], 20], "命中第二分支"];
+@Assert[EqualI64[@Which[{(miss, 10)}, 30], 30], "全部不命中时取 fallback"];
+@Assert[
+  EqualI64[@Which[{(hit, 1), (@Panic["后续条件不应求值"], 2)}, 0], 1],
+  "命中后不再求值后续条件"
+];
+@Assert[
+  EqualI64[@Which[{(hit, 1), (miss, @Panic["未命中分支不应求值"])}, 0], 1],
+  "只求值命中分支的值"
+];
+@Assert[
+  EqualI64[@Which[{(hit, 1)}, @Panic["命中时不求值 fallback"]], 1],
+  "命中时不求值 fallback"
+];
+
+@Def[makeMessage, [] : string, @Panic["断言信息不应求值"]];
+@Assert[LessI64[1, 2], makeMessage[]];
+@Assert[EqualBool[true, true], "恒真"];

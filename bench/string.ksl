@@ -1,0 +1,15 @@
+# 字符列表往返与比较的开销.
+#
+# 拼接一段长文本, 全部拆成字符列表再合回字符串, 最后比较内容.
+# 这是转换压力测试, 不代表普通字符串处理; 普通文本处理主要使用
+# StringSplit, StringLines 与 StringWords.
+
+# @result 1220000
+
+@Let[source, "The quick brown fox jumps over the lazy dog, again and again."];
+@Let[wide, StringJoin[@ListRepeat[source, 20000u64]]];
+@Let[chars, StringToChars[wide]];
+@Let[joined, CharsToString[chars]];
+@Let[_, EqualString[joined, wide]];
+@Let[result, U64ToI64[@ListLength[chars]]];
+Print[f"{result}\n"]

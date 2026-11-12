@@ -1,0 +1,52 @@
+# Actor 服务: 请求回复与 Join 监督重启.
+#
+# counter 持有计数状态, 客户端通过消息携带自己的 Pid 收取回复.
+# supervisor 等待 worker 结束, 重启到第三次后返回结果.
+
+@Data[Counter, {
+  Add[i64],
+  Query[Pid[i64, i64]]
+}];
+
+@Let[counter, @Handler[[self : Pid[Counter, i64], total : i64] : i64,
+  @Match[@Receive[0u8, Option/None[]], {
+    (/Some[message], @Match[message, {
+      (/Add[n], @Continue[AddI64[total, n]]),
+      (/Query[client], @Block[
+        @Let[_, @Send[client, 0u8, total]],
+        @Continue[total]
+      ])
+    }]),
+    (/None[], total)
+  }]]];
+
+@Let[client, @Handler[[self : Pid[i64, i64], server : Pid[Counter, i64]] : i64,
+  @Block[
+    @Let[_, @Send[server, 0u8, Counter/Add[5]]],
+    @Let[_, @Send[server, 0u8, Counter/Add[7]]],
+    @Let[_, @Send[server, 0u8, Counter/Query[self]]],
+    @Match[@Receive[0u8, Option/None[]], {
+      (/Some[total], total),
+      (/None[], -1)
+    }]
+  ]]];
+
+@Let[worker, @Handler[[self : Pid[nil, i64], n : i64] : i64, n]];
+
+@Let[supervisor, @Handler[
+  [self : Pid[nil, i64], attempt : i64] : i64,
+  @Block[
+    @Let[child, @Spawn[worker, MulI64[attempt, 14]]],
+    @Let[result, @ResultGet[@Join[child], -1]],
+    @If[EqualI64[attempt, 3], result, @Continue[AddI64[attempt, 1]]]
+  ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[server, @Spawn[counter, 0]],
+    @Let[client_pid, @Spawn[client, server]],
+    @Let[counter_result, @ResultGet[@Join[client_pid], -1]],
+    @Let[supervisor_pid, @Spawn[supervisor, 1]],
+    @Let[supervised, @ResultGet[@Join[supervisor_pid], -1]],
+    Print[f"counter={counter_result} supervised={supervised}\n"]
+  ]]

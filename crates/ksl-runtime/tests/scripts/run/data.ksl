@@ -1,0 +1,12 @@
+# Data: 构造, 字段投影与嵌套.
+
+@Data[P, {Init[string, u8]}];
+@Let[init, P/Init["k", 10u8]];
+@Let[init_name, @DataGet[init, 0u8]];
+@Let[init_age, @DataGet[init, 1u8]];
+@Assert[EqualString[init_name, "k"], "读取字符串字段"];
+@Assert[EqualU8[init_age, 10u8], "读取整数字段"];
+
+@Data[Outer, {I[P, string]}];
+@Let[outer, Outer/I[init, "x"]];
+@Assert[EqualU8[@DataGet[@DataGet[outer, 0u8], 1u8], 10u8], "嵌套字段投影"];

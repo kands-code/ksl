@@ -1,0 +1,59 @@
+# raylib core_storage_values 示例.
+#
+# 与 C 版一致: R 生成分数, ENTER 保存, SPACE 读取.
+# 示例先切换到模块目录下的 tmp/, 存储文件写在该目录.
+
+@Use[{
+  InitWindow, CloseWindow, WindowShouldClose, BeginDrawing, EndDrawing, ClearBackground,
+  DrawText, SetTargetFPS, IsKeyPressed, GetRandomValue,
+  ChangeDirectory, SaveStorageValue, LoadStorageValue,
+  KEY_R, KEY_ENTER, KEY_SPACE,
+  RAYWHITE, MAROON, BLACK, LIME, LIGHTGRAY
+}, "raylib"];
+
+@Let[STORAGE_DIR, JoinPath[GetModuleDirectory[], "tmp"]];
+@Let[_, CreateDirectoryAll[STORAGE_DIR]];
+@Assert[ChangeDirectory[STORAGE_DIR], "切换存储目录"];
+
+@Let[SCREEN_WIDTH, 800i32];
+@Let[SCREEN_HEIGHT, 450i32];
+
+@Def[draw, [score : i32, hiscore : i32, frames : i64] : nil,
+  @Block[
+    BeginDrawing[],
+    ClearBackground[RAYWHITE],
+    DrawText[f"SCORE: {score}", 280i32, 130i32, 40i32, MAROON],
+    DrawText[f"HI-SCORE: {hiscore}", 210i32, 200i32, 50i32, BLACK],
+    DrawText[f"frames: {frames}", 10i32, 10i32, 20i32, LIME],
+    DrawText["Press R to generate random numbers", 220i32, 40i32, 20i32, LIGHTGRAY],
+    DrawText["Press ENTER to SAVE values", 250i32, 310i32, 20i32, LIGHTGRAY],
+    DrawText["Press SPACE to LOAD values", 252i32, 350i32, 20i32, LIGHTGRAY],
+    EndDrawing[]
+  ]];
+
+@Def[frame, [score : i32, hiscore : i32, frames : i64] : nil,
+  @If[WindowShouldClose[],
+    nil,
+    @Block[
+      @Let[scoreRandom, @If[IsKeyPressed[KEY_R], GetRandomValue[1000i32, 2000i32], score]],
+      @Let[hiscoreRandom, @If[IsKeyPressed[KEY_R], GetRandomValue[2000i32, 4000i32], hiscore]],
+      @If[IsKeyPressed[KEY_ENTER], @Block[
+        @Let[_, SaveStorageValue[0u32, scoreRandom]],
+        @Let[_, SaveStorageValue[1u32, hiscoreRandom]]
+      ], nil],
+      @Let[loaded, @If[IsKeyPressed[KEY_SPACE],
+        (LoadStorageValue[0u32], LoadStorageValue[1u32]),
+        (scoreRandom, hiscoreRandom)]],
+      @Let[nextScore, @Fst[loaded]],
+      @Let[nextHiscore, @Snd[loaded]],
+      draw[nextScore, nextHiscore, frames],
+      frame[nextScore, nextHiscore, AddI64[frames, 1]]
+    ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    InitWindow[SCREEN_WIDTH, SCREEN_HEIGHT, "raylib [core] example - storage values"],
+    SetTargetFPS[60i32],
+    frame[0i32, 0i32, 0],
+    CloseWindow[]
+  ]];

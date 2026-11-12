@@ -1,0 +1,25 @@
+[package]
+name = "ksl-compile"
+description = "ksl 模块加载, 链接与检查缓存"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arcstr.workspace = true
+imbl.workspace = true
+indexmap.workspace = true
+ksl-base.workspace = true
+ksl-diagnostics.workspace = true
+ksl-frontend.workspace = true
+ksl-typed.workspace = true
+
+# tests/common.rs 是各集成测试共享的辅助代码, 不作为独立测试目标.
+[[test]]
+name = "common"
+test = false
+bench = false
+
+[lints]
+workspace = true

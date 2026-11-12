@@ -1,0 +1,17 @@
+# 位运算与数值转换.
+
+# 移位达到字宽时结果为 0; 右移按逻辑移位.
+@Assert[EqualI64[ShiftLeftI64[1, 64u8], 0], "i64 左移达到字宽"];
+@Assert[EqualI64[ShiftRightI64[-1, 1u8], 9223372036854775807], "i64 逻辑右移"];
+@Assert[EqualU32[ShiftLeftU32[1u32, 32u8], 0u32], "u32 左移达到字宽"];
+@Assert[EqualU32[ShiftRightU32[1024u32, 3u8], 128u32], "u32 逻辑右移"];
+@Assert[EqualI32[ShiftRightI32[-1i32, 1u8], 2147483647i32], "i32 逻辑右移"];
+
+@Assert[EqualI64[BitAndI64[12, 10], 8], "按位与"];
+@Assert[EqualI64[BitXorI64[12, 10], 6], "按位异或"];
+@Assert[EqualU8[BitReverseU8[1u8], 128u8], "按位反转"];
+
+# 转换: 精确转换不损失精度, 窄化转换越界报错.
+@Assert[EqualI64[U8ToI64[7u8], 7], "u8 放宽到 i64"];
+@Assert[EqualU8[U64ToU8[7u64], 7u8], "u64 窄化到 u8"];
+@Assert[EqualF64[I32ToF64[3i32], 3.0], "i32 转 f64"];

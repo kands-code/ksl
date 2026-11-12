@@ -1,0 +1,5 @@
+@Use[{MakeWidget, ^Widget}, "demo"];
+@Link["demo", {}, { widget_value : Fn[[Widget] : i64] }];
+@Export[make, value, ^Widget];
+@Let[make, @Fn[[] : Widget, MakeWidget[]]];
+@Let[value, @Fn[[w : Widget] : i64, widget_value[w]]];

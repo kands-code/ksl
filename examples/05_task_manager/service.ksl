@@ -1,0 +1,128 @@
+# 任务管理器的 Actor 服务入口.
+#
+# 服务端 Handler 持有任务列表, 客户端通过消息请求并在自己的信箱收取回复.
+# 每次变更后写回模块所在目录的 `tmp/tasks.txt`.
+# 输入 `quit` 或管道结束时退出.
+
+@Use[{
+  ^Task,
+  ^Reply,
+  ^Request,
+  ^Command,
+  formatList,
+  addTask,
+  completeTask,
+  removeTask,
+  statsText,
+  formatError,
+  parseRequest
+}, "lib/model"];
+@Use[{load, save}, "lib/store"];
+
+@Let[DATA_DIR, JoinPath[GetModuleDirectory[], "tmp"]];
+@Let[DATA_FILE, JoinPath[DATA_DIR, "tasks.txt"]];
+@Let[_, CreateDirectoryAll[DATA_DIR]];
+
+@Def[formatInputError, [error : InputError] : string,
+  @Match[error, {
+    (InputError/NotATerminal[], "not a terminal"),
+    (InputError/Interrupted[], "interrupted"),
+    (InputError/RawModeActive[], "raw mode active"),
+    (InputError/RawModeHeld[], "raw mode held"),
+    (InputError/NotRawModeHolder[], "not raw mode holder"),
+    (InputError/RawModeReleased[], "raw mode released"),
+    (InputError/Other[message], message)
+  }]];
+
+@Let[client, @Handler[
+  [self : Pid[Reply, string], service : Pid[Command, i64], request : Request] : string,
+  @Block[
+    @Let[sent, @Send[service, 0u8, Command/Call[request, self]]],
+    @Match[@Receive[0u8, Option/Some[1000u64]], {
+      (/Some[reply], @Match[reply, { (Reply/Text[text], text) }]),
+      (/None[], "timeout")
+    }]
+  ]]];
+
+@Def[handle, [request : Request, tasks : List[Task], path : string] : Pair[List[Task], string],
+  @Match[request, {
+    (Request/ListTasks[], (tasks, formatList[tasks])),
+    (Request/Stats[], (tasks, statsText[tasks])),
+    (Request/AddTask[title, priority], @Block[
+      @Let[added, addTask[tasks, title, priority]],
+      @Let[newTasks, @Fst[added]],
+      @Let[id, @Snd[added]],
+      @Match[save[path, newTasks], {
+        (Result/Ok[_], (newTasks, f"added {id}")),
+        (Result/Err[error], (newTasks, formatError[error]))
+      }]
+    ]),
+    (Request/CompleteTask[id], @Block[
+      @Let[newTasks, completeTask[tasks, id]],
+      @Match[save[path, newTasks], {
+        (Result/Ok[_], (newTasks, f"completed {id}")),
+        (Result/Err[error], (newTasks, formatError[error]))
+      }]
+    ]),
+    (Request/RemoveTask[id], @Block[
+      @Let[newTasks, removeTask[tasks, id]],
+      @Match[save[path, newTasks], {
+        (Result/Ok[_], (newTasks, f"removed {id}")),
+        (Result/Err[error], (newTasks, formatError[error]))
+      }]
+    ])
+  }]];
+
+@Let[service, @Handler[
+  [self : Pid[Command, i64], tasks : List[Task], path : string] : i64,
+  @Match[@Receive[0u8, Option/None[]], {
+    (/Some[message], @Match[message, {
+      (Command/Call[request, reply], @Block[
+        @Let[outcome, handle[request, tasks, path]],
+        @Let[sent, @Send[reply, 0u8, Reply/Text[@Snd[outcome]]]],
+        @Continue[@Fst[outcome], path]
+      ])
+    }]),
+    (/None[], 0)
+  }]]];
+
+@Let[loop, @Handler[
+  [self : Pid[nil, nil], service_pid : Pid[Command, i64]] : nil,
+  @Match[ReadLine["> "], {
+    (Result/Ok[lineOpt], @Match[lineOpt, {
+      (Option/Some[line], @Block[
+        @If[EqualString[line, "quit"],
+          nil,
+          @Block[
+            @Match[parseRequest[line], {
+              (Option/Some[request], @Block[
+                @Let[worker, @Spawn[client, service_pid, request]],
+                @Let[answer, @ResultGet[@Join[worker], "client failed"]],
+                Print[f"{answer}\n"],
+                @Continue[service_pid]
+              ]),
+              (Option/None[], @Block[
+                Print["unknown command\n"],
+                @Continue[service_pid]
+              ])
+            }]
+          ]]
+      ]),
+      (Option/None[], nil)
+    }]),
+    (Result/Err[error], Print[StringJoin[{formatInputError[error], "\n"}]])
+  }]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Match[load[DATA_FILE], {
+    (Result/Ok[tasks], @Block[
+      @Let[service_pid, @Spawn[service, tasks, DATA_FILE]],
+      Print["task service ready\n"],
+      Print["commands: list, stats, add <priority> <title>, done <id>, remove <id>, quit\n"],
+      @Let[loop_pid, @Spawn[loop, service_pid]],
+      @Let[_, @Join[loop_pid]],
+      @Let[_, @Kill[service_pid]],
+      Print["bye\n"]
+    ]),
+    (Result/Err[error], Print[StringJoin[{formatError[error], "\n"}]])
+  }]]

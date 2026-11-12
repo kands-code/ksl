@@ -1,0 +1,148 @@
+# Actor 退出: 强制终止, 归属, 退出原因与 Join 错误.
+
+@Def[waiting, [] : Handler[Pid[i64, i64]],
+  @Handler[[self : Pid[i64, i64]] : i64,
+    @Match[@Receive[0u8, Option/None[]], {
+      (/Some[x], x),
+      (/None[], 0)
+    }]]];
+
+@Def[isKilled, [reason : ExitReason] : bool,
+  @Match[reason, { (/Killed[], true), (_, false) }]];
+
+@Def[isHalted, [reason : ExitReason] : bool,
+  @Match[reason, { (/Halted[], true), (_, false) }]];
+
+@Def[failureMessage, [reason : ExitReason] : string,
+  @Match[reason, { (/Failed[_, message], message), (_, "") }]];
+
+@Main[[self : Pid[Pid[i64, i64], nil]] : nil,
+  @Block[
+    # 强制终止: 返回值与 Join 退出原因.
+    @Block[
+      @Let[p, @Spawn[waiting[]]],
+      @Assert[@Kill[p], "Kill 存活目标返回 true"],
+      @Assert[
+        @Match[@Join[p], {
+          (/Ok[_], false),
+          (/Err[reason], isKilled[reason])
+        }],
+        "等待中的 Actor 被 Kill 后 Join 返回 Killed"
+      ],
+      @Assert[Not[@Kill[p]], "Kill 已终止目标返回 false"]
+    ],
+
+    # 归属关系: 父退出终止子 Actor, 子杀死父后自身也终止;
+    # SpawnDetached 子 Actor 独立存活.
+    @Block[
+      # 杀死父 Actor 后子 Actor 应终止.
+      @Let[tattler, @Handler[
+        [self : Pid[i64, i64], owner : Pid[nil, nil], out : Pid[Pid[i64, i64], nil]]
+          : i64,
+        @Block[
+          @Let[_, @Receive[0u8, Option/None[]]],
+          @Let[_, @Kill[owner]],
+          0
+        ]]],
+      @Let[victim, @Handler[
+        [self : Pid[nil, nil], out : Pid[Pid[i64, i64], nil]] : nil,
+        @Block[
+          @Let[c, @Spawn[tattler, self, out]],
+          @Let[_, @Send[out, 0u8, c]],
+          @Let[_, @Send[c, 0u8, 0]],
+          @Let[_, @Receive[0u8, Option/None[]]],
+          nil
+        ]]],
+      @Let[victim_pid, @Spawn[victim, self]],
+      @Let[_, @Join[victim_pid]],
+      @Let[orphan, @Match[@Receive[0u8, Option/Some[1000u64]], {
+        (/Some[c], c),
+        (/None[], @Panic["未收到子 Actor 的 Pid"])
+      }]],
+      @Assert[
+        @Match[@Join[orphan], {
+          (/Ok[_], false),
+          (/Err[reason], isKilled[reason])
+        }],
+        "杀死父 Actor 后子 Actor 应终止"
+      ],
+
+      @Let[parent, @Handler[
+        [self : Pid[nil, i64], root : Pid[Pid[i64, i64], nil]] : i64,
+        @Block[
+          @Let[c, @Spawn[waiting[]]],
+          @Let[_, @Send[root, 0u8, c]],
+          0
+        ]]],
+      @Let[runner, @Spawn[parent, self]],
+      @Let[spawned, @Match[@Receive[0u8, Option/Some[1000u64]], {
+        (/Some[c], c),
+        (/None[], @Panic["未收到子 Actor 的 Pid"])
+      }]],
+      @Let[_, @Join[runner]],
+      @Assert[
+        @Match[@Join[spawned], {
+          (/Ok[_], false),
+          (/Err[reason], isKilled[reason])
+        }],
+        "父退出终止子 Actor"
+      ],
+
+      @Let[survivor, @Handler[[self : Pid[i64, i64]] : i64, @Block[@Sleep[10u64], 7]]],
+      @Let[detaching, @Handler[
+        [self : Pid[nil, i64], root : Pid[Pid[i64, i64], nil]] : i64,
+        @Block[
+          @Let[c, @SpawnDetached[survivor]],
+          @Let[_, @Send[root, 0u8, c]],
+          0
+        ]]],
+      @Let[runner2, @Spawn[detaching, self]],
+      @Let[detached, @Match[@Receive[0u8, Option/Some[1000u64]], {
+        (/Some[c], c),
+        (/None[], @Panic["未收到子 Actor 的 Pid"])
+      }]],
+      @Let[_, @Join[runner2]],
+      @Assert[
+        EqualI64[@ResultGet[@Join[detached], 0], 7],
+        "Detached 子 Actor 不受父退出影响"
+      ]
+    ],
+
+    # 退出原因: 主动中止为 Failed, Halt 为 Halted.
+    @Block[
+      @Let[panicking, @Handler[[self : Pid[i64, nil]] : nil, @Panic["actor 内中止"]]],
+      @Assert[
+        EqualString[
+          @Match[@Join[@Spawn[panicking]], {
+            (/Ok[_], ""),
+            (/Err[reason], failureMessage[reason])
+          }],
+          "主动中止: actor 内中止"
+        ],
+        "Actor 内主动中止带说明"
+      ],
+
+      @Let[halting, @Handler[[self : Pid[nil, nil]] : nil, @Halt[]]],
+      @Assert[
+        @Match[@Join[@Spawn[halting]], {
+          (/Ok[_], false),
+          (/Err[reason], isHalted[reason])
+        }],
+        "@Halt 终止自身, 退出原因为 Halted"
+      ]
+    ],
+
+    # 子 Actor 不能 Join 根 Actor.
+    @Block[
+      @Let[joins_root, @Handler[
+        [self : Pid[nil, nil], root : Pid[Pid[i64, i64], nil]] : nil,
+        @Block[@Let[_, @Join[root]]]]],
+      @Assert[
+        @Match[@Join[@Spawn[joins_root, self]], {
+          (/Ok[_], false),
+          (/Err[reason], EqualString[failureMessage[reason], "不能 Join 根 Actor"])
+        }],
+        "Join 根 Actor 报运行时错误"
+      ]
+    ]
+  ]]

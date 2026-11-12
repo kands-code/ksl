@@ -1,0 +1,43 @@
+# 并发等待超时的开销.
+#
+# 启动器创建 2000 个等待者, 每个在 `@Receive` 上等待同一个超时.
+# 收集器逐个 `@Join`.
+
+# @result 2000
+
+@Let[waiter, @Handler[[self : Pid[i64, i64]] : i64,
+  @Match[@Receive[0u8, Option/Some[10u64]], {
+    (/Some[x], x),
+    (/None[], 1)
+  }]]];
+
+@Let[spawner, @Handler[
+  [self : Pid[nil, List[Pid[i64, i64]]], remaining : i64,
+   waiters : List[Pid[i64, i64]]] : List[Pid[i64, i64]],
+  @If[LessOrEqualI64[remaining, 0], waiters,
+    @Block[
+      @Let[p, @SpawnDetached[waiter]],
+      @Continue[SubI64[remaining, 1], @ListPrepend[waiters, p]]
+    ]
+  ]]];
+
+@Let[collector, @Handler[
+  [self : Pid[nil, i64], waiters : List[Pid[i64, i64]],
+   index : u64, total : i64] : i64,
+  @If[LessU64[index, @ListLength[waiters]],
+    @Block[
+      @Let[p, @ListGet[waiters, index]],
+      @Let[value, @ResultGet[@Join[p], 0]],
+      @Continue[waiters, AddU64[index, 1u64], AddI64[total, value]]
+    ],
+    total
+  ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[spawner_pid, @Spawn[spawner, 2000, {}]],
+    @Let[waiters : List[Pid[i64, i64]], @ResultGet[@Join[spawner_pid], {}]],
+    @Let[collector_pid, @Spawn[collector, waiters, 0u64, 0]],
+    @Let[result, @ResultGet[@Join[collector_pid], -1]],
+    Print[f"{result}\n"]
+  ]];

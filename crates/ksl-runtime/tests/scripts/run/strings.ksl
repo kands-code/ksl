@@ -1,0 +1,62 @@
+# 字符串操作与字符判定.
+
+@Assert[
+  EqualString[StringJoin[@ListRiffle[StringSplit["a,b,,c", ","], "|", 1u64]], "a|b||c"],
+  "按分隔符切分"
+];
+@Assert[EqualString[StringJoin[StringSplit["abc", ""]], "abc"], "空分隔符返回原串"];
+@Assert[
+  EqualString[StringJoin[@ListRiffle[StringLines["a\r\nb\n"], "/", 1u64]], "a/b"],
+  "按行切分"
+];
+@Assert[EqualU64[@ListLength[StringLines[""]], 0u64], "空串分行"];
+@Assert[EqualString[StringJoin[StringLines["a\r"]], "a\r"], "单独的 CR 不是换行"];
+@Assert[
+  EqualString[StringJoin[@ListRiffle[StringWords["  a\tb c "], "-", 1u64]], "a-b-c"],
+  "按空白切词"
+];
+
+@Assert[EqualString[StringTrim[" \t x \n"], "x"], "去除两端空白"];
+@Assert[EqualString[StringUppercase["Straße"], "STRASSE"], "大写转换"];
+@Assert[EqualString[StringLowercase["ÄÖÜ"], "äöü"], "小写转换"];
+@Assert[EqualBool[StringStartsWith["hello", "he"], true], "前缀判定"];
+@Assert[EqualBool[StringEndsWith["hello", "lo"], true], "后缀判定"];
+@Assert[EqualBool[StringContains["hello", "ell"], true], "包含判定"];
+@Assert[
+  EqualU64[@OptionGet[StringIndexOf["héllo", "llo"], 99u64], 2u64],
+  "子串下标按标量计数"
+];
+@Assert[@IsNone[StringIndexOf["abc", "x"]], "子串未命中"];
+@Assert[EqualU64[@OptionGet[StringIndexOf["abc", ""], 99u64], 0u64], "空子串下标"];
+@Assert[EqualString[StringReplace["a.b.c", ".", "-"], "a-b.c"], "替换第一处"];
+@Assert[EqualString[StringReplaceAll["a.b.c", ".", "-"], "a-b-c"], "替换全部"];
+@Assert[EqualString[StringReplaceAll["a*b", "*", "$1"], "a$1b"], "替换串按字面处理"];
+@Assert[EqualString[StringReplaceAll["ab", "", "-"], "-a-b-"], "空串模式全部替换"];
+
+@Assert[EqualString[StringJoin[{"a", "b", "c"}], "abc"], "字符串拼接"];
+@Assert[EqualString[StringSlice["abc", 1u64, 3u64], "bc"], "按字符取子串"];
+@Assert[EqualString[StringSlice["abc", 0u64, 99u64], "abc"], "终点越界截到串尾"];
+@Assert[EqualString[StringSlice["abc", 2u64, 1u64], ""], "起点不小于终点取空串"];
+@Assert[EqualString[StringSlice["héllo", 1u64, 3u64], "él"], "按字符而非字节切分"];
+@Assert[EqualString[CharsToString[StringToChars["abc"]], "abc"], "字符往返"];
+@Assert[EqualU64[StringLength["hé😀"], 3u64], "按 Unicode 标量计长"];
+@Assert[
+  EqualString[@Match[DecodeUtf8[EncodeUtf8["hé"]], { (/Ok[s], s), (/Err[_], "") }], "hé"],
+  "UTF-8 往返"
+];
+
+# 字符判定: 每类保留普通字符与非 ASCII 分支.
+@Assert[IsWhitespace['　'], "表意空格是 Unicode 空白"];
+@Assert[Not[IsWhitespace['a']], "字母不是空白"];
+@Assert[IsAsciiDigit['0'], "0 是 ASCII 数字"];
+@Assert[Not[IsAsciiDigit['٣']], "阿拉伯数字不是 ASCII 数字"];
+@Assert[IsLetter['中'], "汉字是字母"];
+@Assert[Not[IsLetter['1']], "数字不是字母"];
+@Assert[IsUppercase['Ä'], "Ä 是大写"];
+@Assert[Not[IsLowercase['A']], "A 不是小写"];
+@Assert[IsAlphanumeric['٣'], "Unicode 数字是字母数字"];
+@Assert[Not[IsAlphanumeric['-']], "连字符不是字母数字"];
+
+@Assert[EqualU64[CharToU64['😀'], 128512u64], "非 BMP 标量值"];
+@Assert[EqualChar[U32ToChar[97u32], 'a'], "u32 转 char"];
+@Assert[EqualChar[U64ToChar[97u64], 'a'], "标量值构造字符"];

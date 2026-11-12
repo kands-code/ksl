@@ -1,0 +1,143 @@
+# raylib shader 示例: Game of Life.
+#
+# 左侧分栏显示帧率与操作提示, 右侧显示 shader 结果.
+# 两个渲染纹理交替作为当前与上一代, 片段着色器按上一代计算下一代.
+# Space 暂停/继续, R 重置随机种子, Up/Down 调整速度.
+
+@Use[{
+  InitWindow, CloseWindow, WindowShouldClose, SetTargetFPS,
+  BeginDrawing, EndDrawing, ClearBackground, DrawText, DrawRectangle, DrawLine,
+  BeginTextureMode, EndTextureMode, LoadRenderTexture, UnloadRenderTexture,
+  DrawRenderTexture, LoadShaderFromFragment, UnloadShader, GetShaderLocation,
+  SetShaderValueVec2, BeginShaderMode, EndShaderMode,
+  IsKeyPressed, GetRandomValue, GetFPS,
+  Vec2, ^Vector2, ^RenderTexture, ^Shader,
+  KEY_SPACE, KEY_R, KEY_UP, KEY_DOWN,
+  RAYWHITE, WHITE, BLACK, RED, GRAY, LIGHTGRAY, DARKGRAY
+}, "raylib"];
+
+@Let[PANEL_WIDTH, 200i32];
+@Let[WORLD_WIDTH, 800i32];
+@Let[WORLD_HEIGHT, 600i32];
+@Let[WINDOW_WIDTH, 1000i32];
+@Let[WINDOW_HEIGHT, 600i32];
+@Let[CELL, 8i32];
+@Let[SHADER_PATH, JoinPath[GetModuleDirectory[], "resources/shaders/game_of_life.fs"]];
+
+# 在目标渲染纹理中画随机方块, 作为初始状态.
+@Def[seed_col, [x : i32, y : i32, width : i32] : nil,
+  @If[GreaterOrEqualI32[x, width],
+    nil,
+    @Block[
+      @If[LessI32[GetRandomValue[0i32, 100i32], 18i32],
+        DrawRectangle[x, y, CELL, CELL, BLACK],
+        nil],
+      seed_col[AddI32[x, CELL], y, width]
+    ]]];
+
+@Def[seed_row, [y : i32, width : i32, height : i32] : nil,
+  @If[GreaterOrEqualI32[y, height],
+    nil,
+    @Block[
+      seed_col[0i32, y, width],
+      seed_row[AddI32[y, CELL], width, height]
+    ]]];
+
+@Def[seed, [target : RenderTexture] : nil,
+  @Block[
+    BeginTextureMode[target],
+    ClearBackground[RAYWHITE],
+    seed_row[0i32, WORLD_WIDTH, WORLD_HEIGHT],
+    EndTextureMode[]
+  ]];
+
+@Def[copy, [from : RenderTexture, to : RenderTexture] : nil,
+  @Block[
+    BeginTextureMode[to],
+    ClearBackground[RAYWHITE],
+    DrawRenderTexture[from, Vec2[0.0f32, 0.0f32], WHITE],
+    EndTextureMode[]
+  ]];
+
+@Def[advance, [current : RenderTexture, previous : RenderTexture, shader : Shader] : nil,
+  @Block[
+    BeginTextureMode[current],
+    BeginShaderMode[shader],
+    DrawRenderTexture[previous, Vec2[0.0f32, 0.0f32], RAYWHITE],
+    EndShaderMode[],
+    EndTextureMode[]
+  ]];
+
+@Def[require_shader, [path : string] : Shader,
+  @Match[LoadShaderFromFragment[path], {
+    (Result/Ok[shader], shader),
+    (Result/Err[message], @Panic[message])
+  }]];
+
+@Def[require_render, [width : i32, height : i32] : RenderTexture,
+  @Match[LoadRenderTexture[width, height], {
+    (Result/Ok[target], target),
+    (Result/Err[message], @Panic[message])
+  }]];
+
+@Def[frame,
+  [current : RenderTexture, previous : RenderTexture, shader : Shader,
+    tick : i32, paused : bool, speed : i32] : nil,
+  @If[WindowShouldClose[],
+    @Block[
+      UnloadShader[shader],
+      UnloadRenderTexture[current],
+      UnloadRenderTexture[previous],
+      CloseWindow[]
+    ],
+    @Block[
+      @Let[next_paused, @If[IsKeyPressed[KEY_SPACE], Not[paused], paused]],
+      @Let[next_speed,
+        @If[IsKeyPressed[KEY_UP],
+          @If[LessI32[speed, 10i32], AddI32[speed, 1i32], speed],
+          @If[IsKeyPressed[KEY_DOWN],
+            @If[GreaterI32[speed, 1i32], SubI32[speed, 1i32], speed],
+            speed]]],
+      @Let[reset, IsKeyPressed[KEY_R]],
+      @If[reset, @Block[seed[current], copy[current, previous]], nil],
+      @Let[next_tick,
+        @If[reset, 1i32, @If[next_paused, tick, AddI32[tick, 1i32]]]],
+      @Let[stepping,
+        And[Not[next_paused],
+          EqualI32[ModuloI32[next_tick, SubI32[11i32, next_speed]], 0i32]]],
+      @If[stepping, advance[current, previous, shader], nil],
+      @Let[next_current, @If[stepping, previous, current]],
+      @Let[next_previous, @If[stepping, current, previous]],
+      @Let[fps, GetFPS[]],
+      BeginDrawing[],
+      ClearBackground[RAYWHITE],
+      DrawRenderTexture[current, Vec2[I32ToF32[PANEL_WIDTH], 0.0f32], WHITE],
+      DrawRectangle[0i32, 0i32, PANEL_WIDTH, WINDOW_HEIGHT, LIGHTGRAY],
+      DrawLine[PANEL_WIDTH, 0i32, PANEL_WIDTH, WINDOW_HEIGHT, GRAY],
+      DrawText[f"FPS: {fps}", 16i32, 16i32, 18i32, DARKGRAY],
+      DrawText[@If[next_paused, "PAUSED", "RUNNING"], 16i32, 42i32, 18i32,
+        @If[next_paused, RED, DARKGRAY]],
+      DrawText[f"Speed: {next_speed}", 16i32, 68i32, 18i32, DARKGRAY],
+      DrawLine[16i32, 96i32, SubI32[PANEL_WIDTH, 16i32], 96i32, GRAY],
+      DrawText["SPACE  pause", 16i32, SubI32[WINDOW_HEIGHT, 84i32], 16i32, DARKGRAY],
+      DrawText["R      reset", 16i32, SubI32[WINDOW_HEIGHT, 62i32], 16i32, DARKGRAY],
+      DrawText["UP/DN  speed", 16i32, SubI32[WINDOW_HEIGHT, 40i32], 16i32, DARKGRAY],
+      EndDrawing[],
+      frame[next_current, next_previous, shader, next_tick, next_paused, next_speed]
+    ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    InitWindow[WINDOW_WIDTH, WINDOW_HEIGHT, "raylib [shaders] example - game of life"],
+    SetTargetFPS[60i32],
+    @Let[shader, require_shader[SHADER_PATH]],
+    @Let[resolution_location, GetShaderLocation[shader, "resolution"]],
+    @Assert[GreaterOrEqualI32[resolution_location, 0i32], "resolution uniform not found"],
+    SetShaderValueVec2[shader, resolution_location,
+      Vec2[I32ToF32[WORLD_WIDTH], I32ToF32[WORLD_HEIGHT]]],
+    @Let[current, require_render[WORLD_WIDTH, WORLD_HEIGHT]],
+    @Let[previous, require_render[WORLD_WIDTH, WORLD_HEIGHT]],
+    seed[current],
+    copy[current, previous],
+    frame[current, previous, shader, 0i32, false, 5i32]
+  ]];

@@ -1,0 +1,224 @@
+# raylib 音频频谱水瀑布示例.
+#
+# 加载 country.mp3, 单声道混合后按块推送到音频流;
+# 对最近 512 个样本做 FFT, 按对数频段合并为 64 个值, 写入环形纹理的下一行.
+# 片段着色器按时间向下滚动, 用彩虹色和亮度显示能量, 形成水瀑布.
+# 关闭窗口结束.
+
+@Use[{
+  InitWindow, CloseWindow, WindowShouldClose, SetTargetFPS,
+  BeginDrawing, EndDrawing, ClearBackground, DrawText,
+  InitAudioDevice, CloseAudioDevice, SetAudioStreamBufferSizeDefault,
+  LoadAudioStream, UnloadAudioStream, IsAudioStreamProcessed,
+  UpdateAudioStream, PlayAudioStream, GetFPS, ClampF32,
+  LoadWave, UnloadWave, WaveChunk, WaveSampleRate,
+  GenImageColor, LoadTextureFromImage, UnloadTexture, UnloadImage,
+  UpdateTextureRec, ImageDrawPixel, SetTextureFilter,
+  LoadRenderTexture, UnloadRenderTexture, DrawRenderTexture,
+  LoadShaderFromFragment, UnloadShader, GetShaderLocation,
+  SetShaderValueFloat, SetShaderValueTexture,
+  BeginShaderMode, EndShaderMode,
+  Vec2, Rect, Rgba,
+  ^Image, ^Texture, ^RenderTexture, ^Shader, ^Rectangle,
+  ^AudioStream, ^Wave,
+  BLACK, WHITE, LIGHTGRAY, RED, TEXTURE_FILTER_POINT
+}, "raylib"];
+
+@Use[{fft_magnitudes, blackman_window}, "lib/spectrum"];
+
+@Let[AUDIO_PATH, JoinPath[GetModuleDirectory[], "resources/audio/country.mp3"]];
+@Let[SHADER_PATH, JoinPath[GetModuleDirectory[], "resources/shaders/fft.fs"]];
+@Let[BUFFER_SIZE, 2048u64];
+@Let[FFT_SIZE, 512u64];
+@Let[WINDOW_START, SubU64[BUFFER_SIZE, FFT_SIZE]];
+@Let[BIN_COUNT, 64u64];
+@Let[BIN_COUNT_I32, U64ToI32[BIN_COUNT]];
+@Let[HISTORY_ROWS, 192u64];
+@Let[HISTORY_ROWS_I32, U64ToI32[HISTORY_ROWS]];
+@Let[HALF_BINS, DivideU64[FFT_SIZE, 2u64]];
+@Let[SPECTRUM_BINS, 192u64];
+@Let[FPS, 60i32];
+
+@Let[WINDOW_WIDTH, 800i32];
+@Let[WINDOW_HEIGHT, 450i32];
+@Let[PLOT_TOP, 80i32];
+@Let[PLOT_HEIGHT, 370i32];
+
+# 第 bin 根柱子的边界频点; 对数分布, 每根至少占一个频点.
+@Def[build_boundaries, [bin : u64, previous : u64, out : List[u64]]
+  : List[u64],
+  @If[GreaterU64[bin, BIN_COUNT],
+    out,
+    @Block[
+      @Let[log_position, I64ToU64[TruncateF32[
+        PowerF32[U64ToF32[SPECTRUM_BINS],
+          DivideF32[U64ToF32[bin], U64ToF32[BIN_COUNT]]]]]],
+      @Let[clamped, @If[GreaterU64[log_position, SPECTRUM_BINS],
+        SPECTRUM_BINS,
+        log_position]],
+      @Let[next, @If[GreaterU64[clamped, AddU64[previous, 1u64]],
+        clamped,
+        AddU64[previous, 1u64]]],
+      build_boundaries[AddU64[bin, 1u64], next, @ListAppend[out, next]]
+    ]]];
+
+@Let[BIN_BOUNDARIES, build_boundaries[1u64, 1u64, {1u64}]];
+
+@Def[bin_peak, [mags : List[f32], index : u64, end : u64, best : f32] : f32,
+  @If[GreaterOrEqualU64[index, end],
+    best,
+    @Block[
+      @Let[value, @ListGet[mags, index]],
+      bin_peak[mags, AddU64[index, 1u64], end,
+        @If[GreaterF32[value, best], value, best]]
+    ]]];
+
+@Def[bin_values, [mags : List[f32], bin : u64, out : List[f32]] : List[f32],
+  @If[GreaterOrEqualU64[bin, BIN_COUNT],
+    out,
+    @Block[
+      @Let[start, @ListGet[BIN_BOUNDARIES, bin]],
+      @Let[end, @ListGet[BIN_BOUNDARIES, AddU64[bin, 1u64]]],
+      @Let[peak, @If[LessU64[start, end],
+        bin_peak[mags, start, end, 0.0f32],
+        0.0f32]],
+      bin_values[mags, AddU64[bin, 1u64],
+        @ListAppend[out, ClampF32[MulF32[PowerF32[peak, 0.3f32], 1.8f32], 0.0f32, 1.0f32]]]
+    ]]];
+
+# 新值直接跟随, 旧值按固定比例衰减, 避免柱子瞬间消失.
+@Def[smooth, [values : List[f32], previous : List[f32], index : u64,
+    out : List[f32]] : List[f32],
+  @If[GreaterOrEqualU64[index, @ListLength[values]],
+    out,
+    @Block[
+      @Let[value, @ListGet[values, index]],
+      @Let[decayed, MulF32[@ListGet[previous, index], 0.86f32]],
+      smooth[values, previous, AddU64[index, 1u64],
+        @ListAppend[out, @If[GreaterF32[value, decayed], value, decayed]]]
+    ]]];
+
+# 把柱子高度写入一行图像的红通道.
+@Def[write_bins, [image : Image, heights : List[f32], index : u64] : nil,
+  @If[GreaterOrEqualU64[index, BIN_COUNT],
+    nil,
+    @Block[
+      @Let[level, I64ToU8[TruncateF32[MulF32[@ListGet[heights, index], 255.0f32]]]],
+      ImageDrawPixel[image, U64ToI32[index], 0i32,
+        Rgba[level, 0u8, 0u8, 255u8]],
+      write_bins[image, heights, AddU64[index, 1u64]]
+    ]]];
+
+# 最新一行在环形纹理中的下标; 每推进一个缓冲前进一行.
+@Def[latest_row, [cursor : u64] : u64,
+  @Block[
+    @Let[phase, ModuloU64[DivideU64[cursor, BUFFER_SIZE], HISTORY_ROWS]],
+    @If[EqualU64[phase, 0u64],
+      SubU64[HISTORY_ROWS, 1u64],
+      SubU64[phase, 1u64]]
+  ]];
+
+@Def[frame, [stream : AudioStream, wave : Wave, row_image : Image,
+    history : Texture, shader : Shader, plot_target : RenderTexture,
+    cursor : u64, heights : List[f32]] : nil,
+  @If[WindowShouldClose[],
+    @Block[
+      UnloadShader[shader],
+      UnloadRenderTexture[plot_target],
+      UnloadTexture[history],
+      UnloadImage[row_image],
+      UnloadAudioStream[stream],
+      UnloadWave[wave],
+      CloseAudioDevice[],
+      CloseWindow[]
+    ],
+    @Block[
+      @Let[updated,
+        @If[IsAudioStreamProcessed[stream],
+          @Block[
+            @Let[fetched, WaveChunk[wave, cursor, BUFFER_SIZE]],
+            @Let[samples, @Match[fetched, {
+              (Result/Ok[chunk], chunk),
+              (Result/Err[message], @Panic[message])
+            }]],
+            UpdateAudioStream[stream, samples],
+            @Let[mags, fft_magnitudes[blackman_window[@ListDrop[samples, WINDOW_START]]]],
+            @Let[new_heights, smooth[bin_values[mags, 0u64, {}], heights, 0u64, {}]],
+            @Let[row, ModuloU64[DivideU64[cursor, BUFFER_SIZE], HISTORY_ROWS]],
+            write_bins[row_image, new_heights, 0u64],
+            UpdateTextureRec[history,
+              Rect[0.0f32, I32ToF32[U64ToI32[row]], I32ToF32[BIN_COUNT_I32], 1.0f32], row_image],
+            (AddU64[cursor, BUFFER_SIZE], new_heights)
+          ],
+          (cursor, heights)]],
+      @Let[cursor_after, @Fst[updated]],
+      @Let[heights_after, @Snd[updated]],
+      @Let[fps, GetFPS[]],
+      @Let[channel_location, GetShaderLocation[shader, "iChannel0"]],
+      @Let[row_location, GetShaderLocation[shader, "iWriteRow"]],
+      @Let[row_after, latest_row[cursor_after]],
+      BeginDrawing[],
+      ClearBackground[BLACK],
+      BeginShaderMode[shader],
+      SetShaderValueTexture[shader, channel_location, history],
+      SetShaderValueFloat[shader, row_location, U64ToF32[row_after]],
+      DrawRenderTexture[plot_target, Vec2[0.0f32, I32ToF32[PLOT_TOP]], WHITE],
+      EndShaderMode[],
+      DrawText["country.mp3", 10i32, 10i32, 20i32, WHITE],
+      DrawText[f"FFT {FFT_SIZE} / {BIN_COUNT} bins", 10i32, 32i32, 20i32, LIGHTGRAY],
+      DrawText[f"FPS: {fps}", 10i32, 54i32, 20i32, RED],
+      EndDrawing[],
+      frame[stream, wave, row_image, history, shader, plot_target,
+        cursor_after, heights_after]
+    ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    InitWindow[WINDOW_WIDTH, WINDOW_HEIGHT, "raylib [audio] example - spectrum waterfall"],
+    @Match[InitAudioDevice[], {
+      (Result/Ok[_], nil),
+      (Result/Err[message], @Panic[message])
+    }],
+    SetTargetFPS[FPS],
+    SetAudioStreamBufferSizeDefault[U64ToI32[BUFFER_SIZE]],
+    @Match[LoadShaderFromFragment[SHADER_PATH], {
+      (Result/Ok[shader], @Block[
+        @Match[LoadRenderTexture[WINDOW_WIDTH, PLOT_HEIGHT], {
+          (Result/Ok[plot_target], @Block[
+            @Let[row_image, GenImageColor[BIN_COUNT_I32, 1i32,
+              Rgba[0u8, 0u8, 0u8, 255u8]]],
+            @Let[history_image, GenImageColor[BIN_COUNT_I32, HISTORY_ROWS_I32,
+              Rgba[0u8, 0u8, 0u8, 255u8]]],
+            @Match[LoadTextureFromImage[history_image], {
+              (Result/Ok[history], @Block[
+                UnloadImage[history_image],
+                SetTextureFilter[history, TEXTURE_FILTER_POINT],
+                @Match[LoadWave[AUDIO_PATH], {
+                  (Result/Ok[wave], @Block[
+                    @Match[LoadAudioStream[WaveSampleRate[wave], 32i32, 1i32], {
+                      (Result/Ok[stream], @Block[
+                        PlayAudioStream[stream],
+                        frame[stream, wave, row_image, history, shader,
+                          plot_target, 0u64, @ListRepeat[0.0f32, BIN_COUNT]]
+                      ]),
+                      (Result/Err[message], @Block[
+                        UnloadWave[wave],
+                        @Panic[message]
+                      ])
+                    }]
+                  ]),
+                  (Result/Err[message], @Panic[message])
+                }]
+              ]),
+              (Result/Err[message], @Block[
+                UnloadImage[history_image],
+                @Panic[message]
+              ])
+            }]
+          ]),
+          (Result/Err[message], @Panic[message])
+        }]
+      ]),
+      (Result/Err[message], @Panic[message])
+    }]
+  ]];

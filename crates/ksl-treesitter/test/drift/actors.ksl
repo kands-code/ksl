@@ -1,0 +1,24 @@
+# 漂移测试本地语料: Handler 与原语.
+
+@Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+  @Block[
+    @Sleep[1u64],
+    @If[EqualI64[n, 0], 42, @Halt[]]
+  ]]];
+
+@Let[plain, @Handler[[self : Pid[i64, i64]] : i64, 0]];
+
+@Main[[self : Pid[i64, nil]] : nil,
+  @Block[
+    @Let[p, @Spawn[worker, 3]],
+    @Let[plain_child, @Spawn[plain]],
+    @Let[detached, @SpawnDetached[worker, 0]],
+    @Let[s, @Send[p, 0u8, 1]],
+    @Let[k, @Kill[detached]],
+    @Let[serial, @PidSerial[p]],
+    @Let[timer, @SetTimer[p, 0u8, 1, 10u64]],
+    @Let[timer_id, @OptionGet[timer, 0u64]],
+    @Let[cancelled, @CancelTimer[timer_id]],
+    @Let[joined, @Match[@Join[p], { (/Ok[v], v), (/Err[e], -6) }]],
+    @Let[out, Print[f"{joined}"]]
+  ]];

@@ -1,0 +1,35 @@
+# 监督策略: 子 Actor 因运行时错误或正常结束后重新 spawn.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[failing, @Handler[[self : Pid[nil, i64], n : i64] : i64,
+      @If[EqualI64[n, 0], 42, DivideI64[1, 0]]]],
+    @Let[retrying_on_failure, @Handler[
+      [self : Pid[nil, i64], attempt : i64] : i64,
+      @Block[
+        @Let[child, @Spawn[failing, SubI64[attempt, 1]]],
+        @Match[@Join[child], {
+          (/Ok[value], value),
+          (/Err[_],
+            @If[EqualI64[attempt, 1], -3, @Continue[SubI64[attempt, 1]]])
+        }]
+      ]]],
+    @Let[s1, @Spawn[retrying_on_failure, 3]],
+    @Assert[EqualI64[@ResultGet[@Join[s1], -5], 42], "失败后重启并成功"],
+
+    @Let[finishing, @Handler[[self : Pid[nil, i64], n : i64] : i64, n]],
+    @Let[retrying_after_return, @Handler[
+      [self : Pid[nil, i64], attempt : i64] : i64,
+      @Block[
+        @Let[child, @Spawn[finishing, attempt]],
+        @Match[@Join[child], {
+          (/Ok[value],
+            @If[EqualI64[attempt, 3], value, @Continue[AddI64[attempt, 1]]]),
+          (/Err[_], -1)
+        }]
+      ]]],
+    @Let[s2, @Spawn[retrying_after_return, 1]],
+    @Assert[
+      EqualI64[@ResultGet[@Join[s2], -3], 3],
+      "正常结束后重启不应被过期唤醒打断"
+    ]
+  ]]

@@ -1,0 +1,110 @@
+# Actor 消息: 连续投递, 状态更新, 定义处捕获, 多信箱, 回复与多个 Join.
+@Data[Request, {Query[Pid[Response, string]]}];
+@Data[Response, {Answer[string]}];
+
+@Def[echo, [] : Handler[Pid[i64, i64]],
+  @Handler[[self : Pid[i64, i64]] : i64,
+    @Match[@Receive[0u8, Option/None[]], {
+      (/Some[x], x),
+      (/None[], 0)
+    }]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    # 连续投递: 只需一次唤醒, 消息仍须逐条取到.
+    @Block[
+      @Let[sum, @Handler[[self : Pid[i64, i64], total : i64] : i64,
+        @Match[@Receive[0u8, Option/None[]], {
+          (/Some[n], @If[EqualI64[n, 0], total, @Continue[AddI64[total, n]]]),
+          (/None[], -1)
+        }]]],
+      @Let[burst, @Handler[
+        [self : Pid[nil, nil], target : Pid[i64, i64], remaining : i64] : nil,
+        @If[EqualI64[remaining, 0],
+          @Block[
+            @Let[_, @Send[target, 0u8, 0]],
+            nil
+          ],
+          @Block[
+            @Let[_, @Send[target, 0u8, 1]],
+            @Continue[target, SubI64[remaining, 1]]
+          ]
+        ]
+      ]],
+      @Let[sm, @Spawn[sum, 0]],
+      @Let[sender, @Spawn[burst, sm, 500]],
+      @Let[_, @Join[sender]],
+      @Assert[EqualI64[@ResultGet[@Join[sm], -1], 500], "连续投递不丢消息"]
+    ],
+
+    # 状态更新, 定义处捕获, 多信箱与携带 Pid 的回复.
+    @Block[
+      @Let[counter, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+        @Match[@Receive[0u8, Option/Some[10u64]], {
+          (/Some[m], @Continue[AddI64[n, m]]),
+          (/None[], n)
+        }]]],
+      @Let[c, @Spawn[counter, 0]],
+      @Let[_, @Send[c, 0u8, 5]],
+      @Assert[EqualI64[@ResultGet[@Join[c], -1], 5], "信箱消息更新状态"],
+
+      @Let[bias, 10],
+      @Let[biased, @Handler[[self : Pid[i64, i64], n : i64] : i64, AddI64[bias, n]]],
+      @Let[bias, 20],
+      @Assert[
+        EqualI64[@ResultGet[@Join[@Spawn[biased, 5]], -1], 15],
+        "Handler 按定义处捕获"
+      ],
+
+      @Let[named, @Handler[[self : Pid[i64, string, string]] : string,
+        @Match[@Receive[1u8, Option/None[]], { (/Some[s], s), (/None[], "none") }]]],
+      @Let[mp, @Spawn[named]],
+      @Let[_, @Send[mp, 1u8, "hi"]],
+      @Assert[EqualString[@ResultGet[@Join[mp], "err"], "hi"], "多信箱按索引投递"],
+
+      @Let[client, @Handler[[self : Pid[Response, string]] : string,
+        @Match[@Receive[0u8, Option/None[]], {
+          (/Some[resp], @Match[resp, { (/Answer[s], s) }]),
+          (/None[], "none")
+        }]]],
+      @Let[server, @Handler[[self : Pid[Request, string]] : string,
+        @Match[@Receive[0u8, Option/None[]], {
+          (/Some[req], @Match[req, { (/Query[c2], @Block[
+            @Let[_, @Send[c2, 0u8, Response/Answer["ok"]]],
+            "done"
+          ]) }]),
+          (/None[], "none")
+        }]]],
+      @Let[cp, @Spawn[client]],
+      @Let[sp, @Spawn[server]],
+      @Let[_, @Send[sp, 0u8, Request/Query[cp]]],
+      @Assert[EqualString[@ResultGet[@Join[cp], "err"], "ok"], "消息携带 Pid 并回复"]
+    ],
+
+    # Pid 身份与消息投递的返回值.
+    @Block[
+      @Let[a, @Spawn[echo[]]],
+      @Let[b, @Spawn[echo[]]],
+      @Let[serial, @PidSerial[a]],
+      @Assert[EqualU64[serial, @PidSerial[a]], "同一 Pid 编号稳定"],
+      @Assert[Not[EqualU64[serial, @PidSerial[b]]], "不同 Pid 编号不同"],
+      @Assert[@Send[a, 0u8, 5], "存活目标接受消息"],
+      @Assert[EqualI64[@ResultGet[@Join[a], -1], 5], "投递的消息被接收"],
+      @Assert[Not[@Send[a, 0u8, 6]], "已终止目标拒绝消息"],
+      @Let[_, @Kill[b]]
+    ],
+
+    # 多个 Join 等待者共享同一结果.
+    @Block[
+      @Let[slow, @Handler[[self : Pid[i64, i64]] : i64, @Block[@Sleep[10u64], 7]]],
+      @Let[waiter, @Handler[[self : Pid[i64, i64], t : Pid[i64, i64]] : i64,
+        @ResultGet[@Join[t], -1]]],
+      @Let[t, @Spawn[slow]],
+      @Let[w1, @Spawn[waiter, t]],
+      @Let[w2, @Spawn[waiter, t]],
+      @Assert[
+        EqualI64[@ResultGet[@Join[w1], -2], @ResultGet[@Join[w2], -3]],
+        "多个 Join 等待者共享结果"
+      ]
+    ]
+  ]]

@@ -1,0 +1,34 @@
+# Data 构造与模式匹配的开销.
+#
+# 构造 30000 个变体值, 再用 `@ListFold` 逐个 `@Match` 并累加.
+
+# @result 600020000
+
+@Data[Token, {Add[i64], Mul[i64], Plain[i64]}];
+
+@Def[make, [n : i64, acc : List[Token]] : List[Token],
+  @If[LessOrEqualI64[n, 0], acc,
+    make[
+      SubI64[n, 1],
+      @ListAppend[
+        acc,
+        @Which[
+          {(EqualI64[ModuloI64[n, 3], 0], Token/Add[n]),
+           (EqualI64[ModuloI64[n, 3], 1], Token/Mul[n])},
+          Token/Plain[n]
+        ]
+      ]
+    ]
+  ]
+];
+
+@Let[tokens, make[30000, {}]];
+@Let[result, @ListFold[tokens,
+  @Fn[[t : Token, acc : i64] : i64,
+    @Match[t, {
+      (/Add[n], AddI64[acc, AddI64[n, 1]]),
+      (/Mul[n], AddI64[acc, MulI64[n, 2]]),
+      (/Plain[n], AddI64[acc, n])
+    }]],
+  0]];
+Print[f"{result}\n"]

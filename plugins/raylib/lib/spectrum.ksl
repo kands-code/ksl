@@ -1,0 +1,114 @@
+# 频谱分析: 递归 Cooley-Tukey FFT.
+
+@Let[TWO_PI, 6.2831855f32];
+
+# 按复数下标的奇偶拆分交错序列.
+@Def[split, [rest : List[f32], even : List[f32],
+    odd : List[f32]] : Pair[List[f32], List[f32]],
+  @If[@IsListEmpty[rest],
+    (even, odd),
+    @Block[
+      @Let[re, @ListHead[rest]],
+      @Let[after_re, @ListTail[rest]],
+      @Let[im, @ListHead[after_re]],
+      @Let[after_pair, @ListTail[after_re]],
+      @Let[even_next, @ListAppend[@ListAppend[even, re], im]],
+      @If[@IsListEmpty[after_pair],
+        (even_next, odd),
+        @Block[
+          @Let[re2, @ListHead[after_pair]],
+          @Let[after_re2, @ListTail[after_pair]],
+          @Let[im2, @ListHead[after_re2]],
+          split[@ListTail[after_re2], even_next,
+            @ListAppend[@ListAppend[odd, re2], im2]]
+        ]]
+    ]]];
+
+# 合并两个半长结果.
+#
+# k 是复数下标, first 与 second 分别累加前半与后半的输出.
+@Def[combine, [even : List[f32], odd : List[f32], k : u64,
+    first : List[f32], second : List[f32]] : Pair[List[f32], List[f32]],
+  @Block[
+    @Let[half, DivideU64[@ListLength[even], 2u64]],
+    @If[GreaterOrEqualU64[k, half],
+      (first, second),
+      @Block[
+        @Let[even_re, @ListGet[even, MulU64[k, 2u64]]],
+        @Let[even_im, @ListGet[even, AddU64[MulU64[k, 2u64], 1u64]]],
+        @Let[odd_re, @ListGet[odd, MulU64[k, 2u64]]],
+        @Let[odd_im, @ListGet[odd, AddU64[MulU64[k, 2u64], 1u64]]],
+        @Let[angle, NegF32[DivideF32[
+          MulF32[TWO_PI, U64ToF32[k]],
+          U64ToF32[MulU64[half, 2u64]]]]],
+        @Let[cos_angle, CosF32[angle]],
+        @Let[sin_angle, SinF32[angle]],
+        @Let[t_re, SubF32[MulF32[odd_re, cos_angle], MulF32[odd_im, sin_angle]]],
+        @Let[t_im, AddF32[MulF32[odd_re, sin_angle], MulF32[odd_im, cos_angle]]],
+        combine[even, odd, AddU64[k, 1u64],
+          @ListAppend[@ListAppend[first, AddF32[even_re, t_re]],
+            AddF32[even_im, t_im]],
+          @ListAppend[@ListAppend[second, SubF32[even_re, t_re]],
+            SubF32[even_im, t_im]]]
+      ]]]
+  ];
+
+# 从 FFT 结果取前一半频点的幅度, 按窗口长度归一化.
+@Def[magnitudes, [spectrum : List[f32], count : u64, index : u64,
+    out : List[f32]] : List[f32],
+  @If[GreaterOrEqualU64[index, count],
+    out,
+    @Block[
+      @Let[re, @ListGet[spectrum, MulU64[index, 2u64]]],
+      @Let[im, @ListGet[spectrum, AddU64[MulU64[index, 2u64], 1u64]]],
+      magnitudes[spectrum, count, AddU64[index, 1u64],
+        @ListAppend[out, DivideF32[
+          SqrtF32[AddF32[MulF32[re, re], MulF32[im, im]]],
+          U64ToF32[MulU64[count, 2u64]]]]]
+    ]]];
+
+# 对复数序列做递归 FFT.
+#
+# 输入与输出都是交错格式 `[re0, im0, re1, im1, ...]`,
+# 复数个数必须是 2 的幂. 输出未归一化.
+@Def[fft, [values : List[f32]] : List[f32],
+  @If[LessOrEqualU64[@ListLength[values], 2u64],
+    values,
+    @Block[
+      @Let[halves, split[values, {}, {}]],
+      @Let[even, fft[@Fst[halves]]],
+      @Let[odd, fft[@Snd[halves]]],
+      @Let[merged, combine[even, odd, 0u64, {}, {}]],
+      @ListFlatten[{@Fst[merged], @Snd[merged]}]
+    ]]];
+
+# Blackman 窗, 减少截断带来的频谱泄漏.
+@Def[window_samples, [samples : List[f32], index : u64, count : u64,
+    out : List[f32]] : List[f32],
+  @If[GreaterOrEqualU64[index, count],
+    out,
+    @Block[
+      @Let[x, DivideF32[MulF32[TWO_PI, U64ToF32[index]],
+        U64ToF32[SubU64[count, 1u64]]]],
+      @Let[weight, AddF32[
+        SubF32[0.42f32, MulF32[0.5f32, CosF32[x]]],
+        MulF32[0.08f32, CosF32[MulF32[2.0f32, x]]]]],
+      window_samples[samples, AddU64[index, 1u64], count,
+        @ListAppend[out, MulF32[@ListGet[samples, index], weight]]]
+    ]]];
+
+@Def[blackman_window, [samples : List[f32]] : List[f32],
+  window_samples[samples, 0u64, @ListLength[samples], {}]];
+
+# 计算实数样本的幅度谱; 返回前一半频点.
+#
+# 样本个数必须是 2 的幂.
+@Def[fft_magnitudes, [samples : List[f32]] : List[f32],
+  @Block[
+    @Let[count, @ListLength[samples]],
+    @Let[interleaved, @ListFlatten[@ListMap[samples,
+      @Fn[[value : f32] : List[f32], {value, 0.0f32}]]]],
+    magnitudes[fft[interleaved], DivideU64[count, 2u64], 0u64, {}]
+  ]];
+
+@Export[fft_magnitudes, blackman_window];

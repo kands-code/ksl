@@ -1,0 +1,16 @@
+# 持久化字典的开销.
+#
+# 逐个写入 20000 个键, 再逐个按键读取并累加.
+
+# @result 200010000
+
+@Def[build, [n : i64, acc : Dict[i64, i64]] : Dict[i64, i64],
+  @If[LessOrEqualI64[n, 0], acc, build[SubI64[n, 1], @DictPut[acc, n, n]]]];
+
+@Def[scan, [n : i64, acc : i64, d : Dict[i64, i64]] : i64,
+  @If[LessOrEqualI64[n, 0], acc,
+    scan[SubI64[n, 1], AddI64[acc, @DictGet[d, n, 0]], d]]];
+
+@Let[d, build[20000, @Dict[]]];
+@Let[sum, scan[20000, 0, d]];
+Print[f"{sum}\n"]

@@ -1,0 +1,52 @@
+# plugins/demo 的运行时断言.
+#
+# 由 crates/ksl-host/src/module/tests.rs 构建插件后执行;
+# UNLOAD_MARKER 是测试写入的占位符, 运行前替换为临时路径.
+
+@Use[{
+  add, sum, count_true, add_i32, half, half_f32, is_positive, greet, join, shout, parse,
+  io_add, cpu_add, main_add, MakeWidget, widget_value, list_of, VERSION, TITLE, MAIN_ONLY,
+  was_initialized, init_thread_token, pump_count, set_unload_marker, thread_token, ^Widget
+}, "demo"];
+@Use[{make, value}, "cross"];
+
+@Let[w, MakeWidget[]];
+@Assert[EqualI64[add[2, 3], 5], "add"];
+@Assert[EqualI64[sum[{1, 2, 3}], 6], "列表参数"];
+@Assert[EqualI64[sum[{}], 0], "空列表"];
+@Assert[EqualU64[count_true[{true, false, true}], 2u64], "bool 列表"];
+@Assert[EqualI32[add_i32[2i32, 3i32], 5i32], "add_i32"];
+@Assert[EqualF64[half[9.0], 4.5], "half"];
+@Assert[EqualF32[half_f32[9.0f32], 4.5f32], "half_f32"];
+@Assert[is_positive[1], "positive"];
+@Assert[EqualString[greet["ksl"], "hello ksl"], "greet"];
+@Assert[EqualString[join["a", "b"], "a+b"], "join"];
+@Assert[EqualChar[shout['a'], 'A'], "char"];
+@Assert[EqualI64[@ResultGet[parse["42"], -1], 42], "parse ok"];
+@Assert[EqualBool[@IsErr[parse["x"]], true], "parse err"];
+@Assert[
+  EqualString[@Match[parse["x"], { (/Ok[_], "ok"), (/Err[e], e) }], "bad"],
+  "parse message"
+];
+@Assert[EqualI64[widget_value[w], 42], "widget"];
+@Assert[EqualI64[sum[list_of[7]], 7], "列表返回值"];
+@Let[w2, make[]];
+@Assert[EqualI64[value[w2], 42], "cross module widget"];
+@Assert[EqualI64[VERSION, 1], "version"];
+@Assert[EqualString[TITLE, "demo"], "title"];
+@Assert[EqualI64[io_add[20, 22], 42], "io call"];
+@Assert[EqualI64[cpu_add[20, 22], 42], "cpu call"];
+@Assert[EqualI64[main_add[20, 22], 42], "main call"];
+@Let[runtime_token, thread_token[]];
+@Assert[EqualU64[init_thread_token[], runtime_token], "初始化与调用在同一线程"];
+@Assert[GreaterU64[pump_count[], 0u64], "事件泵应在调度循环中运行"];
+@Assert[EqualI64[MAIN_ONLY, 2], "main global"];
+@Assert[was_initialized[], "插件初始化入口应在加载后调用"];
+@Let[UNLOAD_MARKER, "__UNLOAD_MARKER__"];
+set_unload_marker[UNLOAD_MARKER];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[actor_token, thread_token[]],
+    @Assert[EqualU64[actor_token, runtime_token], "Actor 与 Prelude 在同一调度线程"]
+  ]];

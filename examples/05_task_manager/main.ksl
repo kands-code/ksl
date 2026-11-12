@@ -1,0 +1,55 @@
+# 任务管理器的一次性命令入口.
+#
+# 在模块所在目录的 `tmp/` 下读写 `tasks.txt`.
+# 文件不存在时视为空列表; 变更命令写入时创建该文件.
+
+@Use[{
+  ^Task,
+  ^Request,
+  formatList,
+  addTask,
+  completeTask,
+  removeTask,
+  statsText,
+  formatError,
+  dispatch
+}, "lib/model"];
+@Use[{load, save}, "lib/store"];
+
+@Let[DATA_DIR, JoinPath[GetModuleDirectory[], "tmp"]];
+@Let[DATA_FILE, JoinPath[DATA_DIR, "tasks.txt"]];
+@Let[_, CreateDirectoryAll[DATA_DIR]];
+
+@Let[usage, StringJoin[{
+  "usage: ",
+  "ksl run main.ksl -- ",
+  "{list|stats|add <priority> <title>|done <id>|remove <id>}"
+}]];
+
+@Def[saveAndReport, [tasks : List[Task], message : string] : nil,
+  @Match[save[DATA_FILE, tasks], {
+    (Result/Ok[_], Print[f"{message}\n"]),
+    (Result/Err[error], Print[StringJoin[{formatError[error], "\n"}]])
+  }]];
+
+@Let[args, Args[]];
+
+@If[EqualU64[@ListLength[args], 0u64],
+  Print[f"{usage}\n"],
+  @Match[load[DATA_FILE], {
+    (Result/Ok[tasks], @Match[dispatch[@ListGet[args, 0u64], args], {
+      (/Some[request], @Match[request, {
+        (/ListTasks[], Print[StringJoin[{formatList[tasks], "\n"}]]),
+        (/Stats[], Print[StringJoin[{statsText[tasks], "\n"}]]),
+        (/AddTask[title, priority], @Block[
+          @Let[added, addTask[tasks, title, priority]],
+          @Let[id, @Snd[added]],
+          saveAndReport[@Fst[added], f"added {id}"]
+        ]),
+        (/CompleteTask[id], saveAndReport[completeTask[tasks, id], f"completed {id}"]),
+        (/RemoveTask[id], saveAndReport[removeTask[tasks, id], f"removed {id}"])
+      }]),
+      (/None[], Print[f"{usage}\n"])
+    }]),
+    (Result/Err[error], Print[StringJoin[{formatError[error], "\n"}]])
+  }]]

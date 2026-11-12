@@ -1,0 +1,101 @@
+# 聊天协议与 Actor: 对端事件, 标准输入读取与协调者.
+#
+# 协调者持有套接字, 两个读 Actor 分别处理标准输入与网络输入.
+# 输入使用 ReadLine, 异步消息插入提示符上方, 当前行保留并重绘.
+#
+# 握手: 双方各发一行昵称, 收到对端昵称后才开始聊天.
+
+@Data[ChatEvent, {
+  LocalLine[string],
+  LocalEof[],
+  PeerLine[string],
+  PeerEof[],
+  PeerError[SocketError]
+}];
+
+@Let[usage, "usage: main.ksl listen <port> <nick> | connect <port> <nick>"];
+
+# 发送本端昵称并读取对端昵称. 成功返回对端昵称, 失败返回错误说明.
+@Def[handshake, [socket : Socket, nick : string] : Result[string, string],
+  @Match[SocketWriteLine[socket, nick, 30000u64], {
+    (/Ok[_], @Match[SocketReadLine[socket, 1024u64, 5000u64], {
+      (/Ok[line], @Match[line, {
+        (/Some[peer], Result/Ok[peer]),
+        (/None[], Result/Err["对端没有发送昵称"])
+      }]),
+      (/Err[_error], Result/Err["读取昵称失败"])
+    }]),
+    (/Err[_error], Result/Err["发送昵称失败"])
+  }]];
+
+# 本端输入提示符.
+@Def[prompt, [nick : string] : string, f"{nick}> "];
+
+@Let[stdin_reader, @Handler[
+  [self : Pid[nil, nil], coordinator : Pid[ChatEvent, nil], local : string] : nil,
+  @Match[ReadLine[prompt[local]], {
+    (/Ok[line], @Match[line, {
+      (/Some[text], @Block[
+        @Let[_, @Send[coordinator, 0u8, ChatEvent/LocalLine[text]]],
+        @Continue[coordinator, local]
+      ]),
+      (/None[], @Block[
+        @Let[_, @Send[coordinator, 0u8, ChatEvent/LocalEof[]]]
+      ])
+    }]),
+    (/Err[_error], @Block[
+      @Let[_, @Send[coordinator, 0u8, ChatEvent/LocalEof[]]]
+    ])
+  }]
+]];
+
+@Let[socket_reader, @Handler[
+  [self : Pid[nil, nil], coordinator : Pid[ChatEvent, nil], socket : Socket] : nil,
+  @Match[SocketReadLine[socket, 4096u64, 60000u64], {
+    (/Ok[line], @Match[line, {
+      (/Some[text], @Block[
+        @Let[_, @Send[coordinator, 0u8, ChatEvent/PeerLine[text]]],
+        @Continue[coordinator, socket]
+      ]),
+      (/None[], @Block[
+        @Let[_, @Send[coordinator, 0u8, ChatEvent/PeerEof[]]]
+      ])
+    }]),
+    (/Err[error], @Match[error, {
+      (/TimedOut[], @Continue[coordinator, socket]),
+      (_, @Block[
+        @Let[_, @Send[coordinator, 0u8, ChatEvent/PeerError[error]]]
+      ])
+    }])
+  }]
+]];
+
+@Let[coordinator, @Handler[
+  [self : Pid[ChatEvent, nil], socket : Socket, started : bool,
+   local : string, peer : string] : nil,
+  @If[started,
+    @Match[@Receive[0u8, Option/None[]], {
+      (/Some[event], @Match[event, {
+        (/LocalLine[text], @Match[SocketWriteLine[socket, text, 30000u64], {
+          (/Ok[_], @Continue[socket, true, local, peer]),
+          (/Err[_error], Print["发送失败, 连接已关闭\r\n"])
+        }]),
+        (/LocalEof[], SocketClose[socket]),
+        (/PeerLine[text], @Block[
+          Print[f"[{peer}] {text}\r\n"],
+          @Continue[socket, true, local, peer]
+        ]),
+        (/PeerEof[], Print[f"[{peer}] 已离开\r\n"]),
+        (/PeerError[_error], Print[f"[{peer}] 连接错误\r\n"])
+      }]),
+      (/None[], nil)
+    }],
+    @Block[
+      @Let[_, @Spawn[stdin_reader, self, local]],
+      @Let[_, @Spawn[socket_reader, self, socket]],
+      @Continue[socket, true, local, peer]
+    ]
+  ]
+]];
+
+@Export[usage, handshake, coordinator, ^ChatEvent];

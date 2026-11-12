@@ -1,0 +1,106 @@
+[workspace]
+members = [
+  "crates/ksl-base",
+  "crates/ksl-catalog",
+  "crates/ksl-compile",
+  "crates/ksl-diagnostics",
+  "crates/ksl-frontend",
+  "crates/ksl-host",
+  "crates/ksl-ir",
+  "crates/ksl-plan",
+  "crates/ksl-runtime",
+  "crates/ksl-typed",
+  "crates/ksl-value",
+  "crates/ksl-io",
+  "crates/ksl-cli",
+  "crates/ksl-macros",
+  "crates/ksl-treesitter",
+  "plugins/demo",
+  "plugins/raylib",
+]
+# 默认构建与测试只覆盖语言实现; 插件需显式 `-p` 或 `--workspace`.
+default-members = [
+  "crates/ksl-base",
+  "crates/ksl-catalog",
+  "crates/ksl-compile",
+  "crates/ksl-diagnostics",
+  "crates/ksl-frontend",
+  "crates/ksl-host",
+  "crates/ksl-ir",
+  "crates/ksl-plan",
+  "crates/ksl-runtime",
+  "crates/ksl-typed",
+  "crates/ksl-value",
+  "crates/ksl-io",
+  "crates/ksl-cli",
+  "crates/ksl-macros",
+  "crates/ksl-treesitter",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.100.0"
+license = "AGPL-3.0-or-later"
+
+[workspace.dependencies]
+annotate-snippets = "0.12"
+arcstr = "1.2"
+cc = "1.2"
+crossbeam-channel = "0.5"
+termina = "0.4.0"
+ena = "0.14.4"
+imbl = "7.0.2"
+indexmap = "2.14.2"
+jiff = { version = "1.0.3", features = ["tzdb-bundle-always"] }
+ksl-base = { version = "0.1.0", path = "crates/ksl-base" }
+ksl-catalog = { version = "0.1.0", path = "crates/ksl-catalog" }
+ksl-compile = { version = "0.1.0", path = "crates/ksl-compile" }
+ksl-diagnostics = { version = "0.1.0", path = "crates/ksl-diagnostics" }
+ksl-frontend = { version = "0.1.0", path = "crates/ksl-frontend" }
+ksl-host = { version = "0.1.0", path = "crates/ksl-host" }
+ksl-ir = { version = "0.1.0", path = "crates/ksl-ir" }
+ksl-macros = { version = "0.1.0", path = "crates/ksl-macros" }
+ksl-plan = { version = "0.1.0", path = "crates/ksl-plan" }
+ksl-runtime = { version = "0.1.0", path = "crates/ksl-runtime" }
+ksl-typed = { version = "0.1.0", path = "crates/ksl-typed" }
+ksl-value = { version = "0.1.0", path = "crates/ksl-value" }
+ksl-io = { version = "0.1.0", path = "crates/ksl-io" }
+libloading = "0.9"
+line-index = "0.1.2"
+lsp-server = "0.10"
+lsp-types = { package = "gen-lsp-types", version = "0.11.0", features = [
+  "url",
+] }
+mio = { version = "1", default-features = false, features = [
+  "net",
+  "os-ext",
+  "os-poll",
+] }
+parking_lot = "0.12.5"
+proc-macro2 = "1"
+quote = "1"
+regex-automata = "0.4"
+regex-syntax = "0.8"
+serde_json = "1.0.154"
+shared_child = { version = "1.1", default-features = false }
+smol_str = "0.3"
+socket2 = "0.6"
+syn = { version = "3", features = ["full"] }
+tree-sitter = "0.27.2"
+tree-sitter-language = "0.1.9"
+unicode-ident = "1.0.27"
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.3"
+winnow = { version = "1.0.5", default-features = false, features = [
+  "std",
+  "parser",
+] }
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

@@ -1,0 +1,37 @@
+# 类型标注与推断: 注解, 期望类型与字面量定型.
+# 无断言的绑定用于确认类型检查可通过; 运行期行为见其他脚本.
+
+@Let[x8 : u8, 12u8];
+@Let[xs : List[u8], {1u8, 2u8}];
+@Let[empty : List[i64], {}];
+@Let[fn8 : Fn[[] : u8], @Fn[[] : u8, 1u8]];
+@Let[pair : Pair[u8, i64], (255u8, 256)];
+@Let[first, @ListGet[{1, 2}, 0u64]];
+@Let[to_text : Fn[[i64] : string], @Fn[[n : i64] : string, "x"]];
+@Let[mapped, @ListMap[{1, 2}, to_text]];
+@Let[fold : Fn[[i64, i64] : i64], @Fn[[a : i64, b : i64] : i64, a]];
+@Let[folded, @ListFold[{1, 2}, fold, 0]];
+@Let[left, @Fst[(1, 'a')]];
+
+@Let[flag, true];
+@Let[some_first, @If[flag, Option/Some[1], Option/None[]]];
+@Let[none_first, @If[flag, Option/None[], Option/Some[1]]];
+@Let[matched, @Match[some_first, { (/Some[v], v), (/None[], 0) }]];
+@Let[empty_branch, @If[flag, {}, {1}]];
+@Let[some_none, {Option/None[], Option/Some[1]}];
+@Let[none_some, {Option/Some[1], Option/None[]}];
+@Let[option : Option[i64], Option/None[]];
+@Let[result : Result[i64, string], Result/Ok[10]];
+@Let[error : Result[i64, string], Result/Err["e"]];
+
+# 空集合的期望类型可由注解或容器操作给出.
+@Let[dict_expected : Dict[string, i64], @DictFromEntries[{}]];
+@Let[set_expected : Set[i64], @SetFromList[{}]];
+@Let[entry_expected : List[Pair[string, i64]], @DictEntries[@Dict[]]];
+@Let[item_expected : List[i64], @SetItems[@Set[]]];
+@Let[set_first, @If[flag, @Set[], @Set[1]]];
+@Let[set_second, @If[flag, @Set[1], @Set[]]];
+
+# 容器与键的元素类型按标注保留.
+@Assert[EqualI32[@DictGet[@Dict[(1i32, 2i32)], 1i32, 0i32], 2i32], "i32 字典键"];
+@Assert[EqualU64[@ListLength[{1i32, 2i32}], 2u64], "i32 列表"];

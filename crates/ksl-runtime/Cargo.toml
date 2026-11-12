@@ -1,0 +1,28 @@
+[package]
+name = "ksl-runtime"
+description = "ksl 运行时"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arcstr.workspace = true
+crossbeam-channel.workspace = true
+imbl.workspace = true
+ksl-base.workspace = true
+ksl-catalog.workspace = true
+ksl-diagnostics.workspace = true
+ksl-io.workspace = true
+ksl-plan.workspace = true
+ksl-value.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+ksl-compile.workspace = true
+ksl-frontend.workspace = true
+ksl-ir.workspace = true
+ksl-typed.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,45 @@
+[package]
+name = "ksl-cli"
+description = "ksl 命令行"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ksl"
+path = "src/main.rs"
+
+# tests/common.rs 是各集成测试共享的辅助代码, 不作为独立测试目标.
+[[test]]
+name = "common"
+test = false
+bench = false
+
+[features]
+default = ["lsp"]
+lsp = [
+  "dep:lsp-server",
+  "dep:lsp-types",
+  "dep:serde_json",
+  "dep:crossbeam-channel",
+]
+
+[dependencies]
+crossbeam-channel = { workspace = true, optional = true }
+ksl-base.workspace = true
+ksl-catalog.workspace = true
+ksl-compile.workspace = true
+ksl-diagnostics.workspace = true
+ksl-frontend.workspace = true
+ksl-host.workspace = true
+ksl-ir.workspace = true
+ksl-runtime.workspace = true
+ksl-value.workspace = true
+ksl-io.workspace = true
+lsp-server = { workspace = true, optional = true }
+lsp-types = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[lints]
+workspace = true

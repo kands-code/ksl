@@ -1,0 +1,127 @@
+# raylib 原始音频流示例.
+#
+# 在主循环内用 IsAudioStreamProcessed 查询并推送正弦样本, 不使用音频回调.
+# 显示的波形与输出同频, 按 0.1 秒的窗口随时间滚动.
+# 上下键调整频率, 左右键调整声像. 关闭窗口结束.
+
+@Use[{
+  InitWindow, CloseWindow, WindowShouldClose, SetTargetFPS,
+  BeginDrawing, EndDrawing, ClearBackground, DrawText, DrawLineV,
+  IsKeyDown, GetScreenWidth,
+  InitAudioDevice, CloseAudioDevice, SetAudioStreamBufferSizeDefault,
+  LoadAudioStream, UnloadAudioStream, IsAudioStreamProcessed,
+  UpdateAudioStream, PlayAudioStream, SetAudioStreamPan, GetFrameTime,
+  Vec2, ClampF32, ^Vector2, ^AudioStream,
+  KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, RAYWHITE, RED, DARKGRAY
+}, "raylib"];
+
+@Let[SAMPLE_RATE, 44100i32];
+@Let[BUFFER_SIZE, 4096i64];
+@Let[FPS, 30i32];
+@Let[PI, 3.1415927f32];
+@Let[TWO_PI, 6.2831855f32];
+@Let[DISPLAY_SECONDS, 0.1f32];
+@Let[WAVE_CENTER, 250.0f32];
+@Let[WAVE_AMPLITUDE, 50.0f32];
+
+# 生成 count 个样本; 相位在每个样本后前进, 越过 2π 时回绕.
+@Def[fill, [count : i64, phase : f32, delta : f32, acc : List[f32]]
+  : Pair[List[f32], f32],
+  @If[LessOrEqualI64[count, 0],
+    (acc, phase),
+    @Block[
+      @Let[next, AddF32[phase, delta]],
+      @Let[wrapped, @If[GreaterF32[next, TWO_PI], SubF32[next, TWO_PI], next]],
+      fill[SubI64[count, 1i64], wrapped, delta, @ListAppend[acc, SinF32[phase]]]
+    ]]];
+
+# 采样点 x 在显示窗口内的纵坐标; 窗口固定为 DISPLAY_SECONDS 秒.
+@Def[wave_y, [x : i32, width : i32, frequency : i32, phase : f32] : f32,
+  AddF32[WAVE_CENTER, MulF32[WAVE_AMPLITUDE,
+    SinF32[AddF32[phase, MulF32[TWO_PI, DivideF32[
+      MulF32[MulF32[I32ToF32[frequency], DISPLAY_SECONDS], I32ToF32[x]],
+      I32ToF32[width]]]]]]]];
+
+# 画出与输出同频的正弦; phase 由帧时间推进, 波形持续向左滚动.
+@Def[draw_wave, [x : i32, width : i32, frequency : i32, phase : f32] : nil,
+  @If[GreaterOrEqualI32[x, width],
+    nil,
+    @Block[
+      @Let[x1, AddI32[x, 1i32]],
+      DrawLineV[
+        Vec2[I32ToF32[x], wave_y[x, width, frequency, phase]],
+        Vec2[I32ToF32[x1], wave_y[x1, width, frequency, phase]],
+        RED
+      ],
+      draw_wave[x1, width, frequency, phase]
+    ]]];
+
+@Def[frame, [stream : AudioStream, next_frequency : i32, phase : f32,
+    display_phase : f32, pan : f32] : nil,
+  @If[WindowShouldClose[],
+    @Block[
+      UnloadAudioStream[stream],
+      CloseAudioDevice[],
+      CloseWindow[]
+    ],
+    @Block[
+      @Let[up, IsKeyDown[KEY_UP]],
+      @Let[down, IsKeyDown[KEY_DOWN]],
+      @Let[new_frequency,
+        @If[up,
+          @If[GreaterOrEqualI32[next_frequency, 12500i32],
+            12500i32,
+            AddI32[next_frequency, 10i32]],
+          @If[down,
+            @If[LessOrEqualI32[next_frequency, 20i32],
+              20i32,
+              SubI32[next_frequency, 10i32]],
+            next_frequency]]],
+      @Let[left, IsKeyDown[KEY_LEFT]],
+      @Let[right, IsKeyDown[KEY_RIGHT]],
+      @Let[new_pan,
+        @If[left,
+          ClampF32[SubF32[pan, 0.01f32], -1.0f32, 1.0f32],
+          @If[right, ClampF32[AddF32[pan, 0.01f32], -1.0f32, 1.0f32], pan]]],
+      SetAudioStreamPan[stream, new_pan],
+      @Let[phase_after,
+        @If[IsAudioStreamProcessed[stream],
+          @Block[
+            @Let[delta, DivideF32[MulF32[TWO_PI, I32ToF32[new_frequency]],
+              I32ToF32[SAMPLE_RATE]]],
+            @Let[filled, fill[BUFFER_SIZE, phase, delta, {}]],
+            UpdateAudioStream[stream, @Fst[filled]],
+            @Snd[filled]
+          ],
+          phase]],
+      @Let[next_display_phase, AddF32[display_phase,
+        MulF32[MulF32[TWO_PI, I32ToF32[new_frequency]], GetFrameTime[]]]],
+      @Let[wrapped_display_phase, SubF32[next_display_phase,
+        MulF32[TWO_PI, I64ToF32[FloorF32[DivideF32[next_display_phase, TWO_PI]]]]]],
+      BeginDrawing[],
+      ClearBackground[RAYWHITE],
+      DrawText[f"Frequency: {new_frequency} Hz", 10i32, 10i32, 20i32, RED],
+      DrawText[f"Pan: {new_pan:.2}", 10i32, 30i32, 20i32, RED],
+      DrawText["Up/Down frequency, Left/Right pan", 10i32, 50i32, 20i32, DARKGRAY],
+      draw_wave[0i32, GetScreenWidth[], new_frequency, wrapped_display_phase],
+      EndDrawing[],
+      frame[stream, new_frequency, phase_after, wrapped_display_phase, new_pan]
+    ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Match[InitAudioDevice[], {
+      (Result/Ok[_], nil),
+      (Result/Err[message], @Panic[message])
+    }],
+    InitWindow[800i32, 450i32, "raylib [audio] example - raw stream"],
+    SetTargetFPS[FPS],
+    SetAudioStreamBufferSizeDefault[4096i32],
+    @Match[LoadAudioStream[SAMPLE_RATE, 32i32, 1i32], {
+      (Result/Ok[stream], @Block[
+        PlayAudioStream[stream],
+        frame[stream, 440i32, 0.0f32, 0.0f32, 0.0f32]
+      ]),
+      (Result/Err[message], @Panic[message])
+    }]
+  ]];

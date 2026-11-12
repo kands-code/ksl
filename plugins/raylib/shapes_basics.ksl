@@ -1,0 +1,267 @@
+# raylib shapes 示例.
+#
+# 以卡片网格展示 2D 形状, 颜色, 文字与碰撞绑定.
+# 启动时校验值与碰撞的纯函数结果; 鼠标所在矩形与目标矩形相交时高亮.
+# 按 S 把当前帧写到模块目录下的 tmp/shapes_basics.png.
+
+@Use[{
+  InitWindow, CloseWindow, WindowShouldClose, SetTargetFPS,
+  BeginDrawing, EndDrawing, ClearBackground, DrawText,
+  DrawPixel, DrawPixelV, DrawLine, DrawLineV, DrawLineEx, DrawLineBezier,
+  DrawLineDashed, DrawTriangle, DrawTriangleGradient, DrawTriangleLines,
+  DrawTriangleLinesEx, DrawRectangle, DrawRectangleV, DrawRectangleRec,
+  DrawRectangleGradientV, DrawRectangleGradientH, DrawRectangleGradientEx,
+  DrawRectangleLines, DrawRectangleLinesEx, DrawRectanglePro,
+  DrawRectangleRounded, DrawRectangleRoundedLines, DrawRectangleRoundedLinesEx,
+  DrawPoly, DrawPolyLines, DrawPolyLinesEx, DrawCircle, DrawCircleV,
+  DrawCircleGradient, DrawCircleLines, DrawCircleLinesV, DrawCircleLinesEx,
+  DrawCircleSector, DrawCircleSectorLines, DrawCircleSectorLinesEx,
+  DrawEllipse, DrawEllipseV, DrawEllipseLines, DrawEllipseLinesV,
+  DrawEllipseLinesEx, DrawRing, DrawRingLines, DrawRingLinesEx,
+  GetFontDefault, DrawTextEx, DrawTextPro, MeasureTextEx, FontBaseSize,
+  ^Vector2, ^Font, Vec2, Vec2X, Vec2Y, Rect, RectX, RectY, RectWidth, RectHeight,
+  RectPosition, RectSize, Vec2Add, Vec2Subtract, Vec2Scale, Vec2Length, Vec2Distance,
+  GetColor, ColorToInt, ColorIsEqual, Fade, ColorFromHSV, ColorTint,
+  ColorBrightness, ColorContrast, ColorAlpha, ColorAlphaBlend, ColorLerp,
+  CheckCollisionRecs, CheckCollisionCircles, CheckCollisionCircleRec,
+  CheckCollisionCircleLine, CheckCollisionPointRec, CheckCollisionPointCircle,
+  CheckCollisionPointTriangle, CheckCollisionPointLine, GetCollisionRec,
+  GetMousePosition, IsKeyPressed, TakeScreenshot, ClampF32,
+  LIGHTGRAY, GRAY, DARKGRAY, YELLOW, GOLD, ORANGE, PINK, RED, MAROON, GREEN, LIME,
+  DARKGREEN, SKYBLUE, BLUE, DARKBLUE, PURPLE, VIOLET, DARKPURPLE, BROWN, WHITE, BLACK,
+  MAGENTA, RAYWHITE, KEY_S
+}, "raylib"];
+
+@Let[SCREEN_WIDTH, 1000i32];
+@Let[SCREEN_HEIGHT, 760i32];
+@Let[FPS, 60i32];
+@Let[CARD_WIDTH, 300.0f32];
+@Let[CARD_HEIGHT, 165.0f32];
+@Let[TARGET, Rect[700.0f32, 640.0f32, 120.0f32, 80.0f32]];
+@Let[MOUSE_SIZE, 50.0f32];
+@Let[SHOT_DIR, JoinPath[GetModuleDirectory[], "tmp"]];
+@Let[SHOT_PATH, JoinPath[SHOT_DIR, "shapes_basics.png"]];
+
+@Def[card, [title : string, x : i32, y : i32] : nil,
+  @Block[
+    DrawRectangleLinesEx[
+      Rect[I32ToF32[x], I32ToF32[y], CARD_WIDTH, CARD_HEIGHT], 1.0f32, LIGHTGRAY],
+    DrawText[title, AddI32[x, 12i32], AddI32[y, 8i32], 18i32, DARKGRAY]
+  ]];
+
+@Def[draw_lines, [] : nil,
+  @Block[
+    card["lines", 30i32, 28i32],
+    DrawLine[42i32, 66i32, 318i32, 66i32, RED],
+    DrawLineV[Vec2[42.0f32, 88.0f32], Vec2[318.0f32, 100.0f32], ORANGE],
+    DrawLineEx[Vec2[42.0f32, 112.0f32], Vec2[318.0f32, 124.0f32], 4.0f32, GOLD],
+    DrawLineBezier[Vec2[42.0f32, 136.0f32], Vec2[318.0f32, 148.0f32], 3.0f32, GREEN],
+    DrawLineDashed[Vec2[42.0f32, 160.0f32], Vec2[318.0f32, 172.0f32], 6i32, 4i32, BLUE],
+    DrawPixel[42i32, 184i32, RED],
+    DrawPixel[54i32, 184i32, ORANGE],
+    DrawPixelV[Vec2[66.0f32, 184.0f32], PURPLE],
+    DrawPixelV[Vec2[78.0f32, 184.0f32], PINK]
+  ]];
+
+@Def[draw_triangles, [] : nil,
+  @Block[
+    card["triangles", 350i32, 28i32],
+    DrawTriangle[Vec2[362.0f32, 175.0f32], Vec2[418.0f32, 175.0f32],
+      Vec2[390.0f32, 85.0f32], MAROON],
+    DrawTriangleGradient[Vec2[432.0f32, 175.0f32], Vec2[488.0f32, 175.0f32],
+      Vec2[460.0f32, 85.0f32], RED, GREEN, BLUE],
+    DrawTriangleLines[Vec2[502.0f32, 175.0f32], Vec2[558.0f32, 175.0f32],
+      Vec2[530.0f32, 85.0f32], DARKGREEN],
+    DrawTriangleLinesEx[Vec2[572.0f32, 175.0f32], Vec2[628.0f32, 175.0f32],
+      Vec2[600.0f32, 85.0f32], 3.0f32, VIOLET]
+  ]];
+
+@Def[draw_rectangles, [] : nil,
+  @Block[
+    card["rectangles", 670i32, 28i32],
+    DrawRectangle[682i32, 64i32, 70i32, 44i32, LIGHTGRAY],
+    DrawRectangleV[Vec2[774.0f32, 64.0f32], Vec2[70.0f32, 44.0f32], GRAY],
+    DrawRectangleRec[Rect[866.0f32, 64.0f32, 70.0f32, 44.0f32], DARKGRAY],
+    DrawRectangleLines[682i32, 126i32, 70i32, 44i32, BLACK],
+    DrawRectangleLinesEx[Rect[774.0f32, 126.0f32, 70.0f32, 44.0f32], 3.0f32, BLACK],
+    DrawRectanglePro[Rect[915.0f32, 148.0f32, 70.0f32, 44.0f32],
+      Vec2[35.0f32, 22.0f32], 20.0f32, ORANGE]
+  ]];
+
+@Def[draw_gradients, [] : nil,
+  @Block[
+    card["gradients and rounded", 30i32, 213i32],
+    DrawRectangleGradientV[42i32, 256i32, 70i32, 44i32, RED, BLUE],
+    DrawRectangleGradientH[134i32, 256i32, 70i32, 44i32, YELLOW, SKYBLUE],
+    DrawRectangleGradientEx[Rect[226.0f32, 256.0f32, 70.0f32, 44.0f32],
+      RED, MAROON, DARKBLUE, BLUE],
+    DrawRectangleRounded[Rect[42.0f32, 318.0f32, 70.0f32, 44.0f32], 0.5f32, 8i32, PINK],
+    DrawRectangleRoundedLines[Rect[134.0f32, 318.0f32, 70.0f32, 44.0f32], 0.5f32, 8i32,
+      LIME],
+    DrawRectangleRoundedLinesEx[Rect[226.0f32, 318.0f32, 70.0f32, 44.0f32], 0.5f32, 8i32,
+      3.0f32, BROWN]
+  ]];
+
+@Def[draw_polygons, [] : nil,
+  @Block[
+    card["polygons", 350i32, 213i32],
+    DrawPoly[Vec2[405.0f32, 300.0f32], 6i32, 40.0f32, 0.0f32, DARKPURPLE],
+    DrawPolyLines[Vec2[500.0f32, 300.0f32], 6i32, 40.0f32, 0.0f32, DARKBLUE],
+    DrawPolyLinesEx[Vec2[595.0f32, 300.0f32], 6i32, 40.0f32, 0.0f32, 3.0f32, DARKGREEN]
+  ]];
+
+@Def[draw_circles, [] : nil,
+  @Block[
+    card["circles", 670i32, 213i32],
+    DrawCircle[712i32, 270i32, 26.0f32, RED],
+    DrawCircleV[Vec2[800.0f32, 270.0f32], 26.0f32, ORANGE],
+    DrawCircleGradient[Vec2[888.0f32, 270.0f32], 26.0f32, WHITE, BLUE],
+    DrawCircleLines[712i32, 330i32, 26.0f32, BLACK],
+    DrawCircleLinesV[Vec2[800.0f32, 330.0f32], 26.0f32, BLACK],
+    DrawCircleLinesEx[Vec2[888.0f32, 330.0f32], 26.0f32, 3.0f32, BLACK]
+  ]];
+
+@Def[draw_sectors, [] : nil,
+  @Block[
+    card["sectors", 30i32, 398i32],
+    DrawCircleSector[Vec2[100.0f32, 470.0f32], 38.0f32, 0.0f32, 90.0f32, 24i32, MAGENTA],
+    DrawCircleSectorLines[Vec2[180.0f32, 470.0f32], 38.0f32, 0.0f32, 90.0f32, 24i32,
+      MAROON],
+    DrawCircleSectorLinesEx[Vec2[260.0f32, 470.0f32], 38.0f32, 0.0f32, 90.0f32, 24i32,
+      3.0f32, DARKPURPLE]
+  ]];
+
+@Def[draw_ellipses, [] : nil,
+  @Block[
+    card["ellipses", 350i32, 398i32],
+    DrawEllipse[420i32, 450i32, 32.0f32, 20.0f32, RED],
+    DrawEllipseV[Vec2[500.0f32, 450.0f32], 32.0f32, 20.0f32, ORANGE],
+    DrawEllipseLines[580i32, 450i32, 32.0f32, 20.0f32, BLACK],
+    DrawEllipseLinesV[Vec2[450.0f32, 510.0f32], 32.0f32, 20.0f32, BLACK],
+    DrawEllipseLinesEx[Vec2[540.0f32, 510.0f32], 32.0f32, 20.0f32, 3.0f32, BLACK]
+  ]];
+
+@Def[draw_rings, [] : nil,
+  @Block[
+    card["rings", 670i32, 398i32],
+    DrawRing[Vec2[740.0f32, 480.0f32], 18.0f32, 34.0f32, 0.0f32, 300.0f32, 24i32, GREEN],
+    DrawRingLines[Vec2[820.0f32, 480.0f32], 18.0f32, 34.0f32, 0.0f32, 300.0f32, 24i32,
+      DARKGREEN],
+    DrawRingLinesEx[Vec2[900.0f32, 480.0f32], 18.0f32, 34.0f32, 0.0f32, 300.0f32, 24i32,
+      3.0f32, LIME]
+  ]];
+
+@Def[draw_text_samples, [font : Font] : nil,
+  @Block[
+    card["text", 30i32, 583i32],
+    DrawText["DrawText", 42i32, 630i32, 20i32, DARKGRAY],
+    DrawTextEx[font, "DrawTextEx", Vec2[42.0f32, 660.0f32], 20.0f32, 2.0f32, DARKGRAY],
+    DrawTextPro[font, "DrawTextPro", Vec2[42.0f32, 692.0f32], Vec2[0.0f32, 10.0f32],
+      12.0f32, 20.0f32, 1.0f32, MAROON],
+    @Let[size, MeasureTextEx[font, "measure", 18.0f32, 1.0f32]],
+    DrawTextEx[font, "measure", Vec2[190.0f32, 660.0f32], 18.0f32, 1.0f32, BLACK],
+    DrawRectangleLinesEx[Rect[190.0f32, 660.0f32, Vec2X[size], Vec2Y[size]], 1.0f32, RED]
+  ]];
+
+@Def[draw_colors, [] : nil,
+  @Block[
+    card["colors", 350i32, 583i32],
+    DrawRectangle[366i32, 635i32, 32i32, 32i32, GetColor[0xE62937FFu32]],
+    DrawRectangle[410i32, 635i32, 32i32, 32i32, ColorFromHSV[200.0f32, 0.8f32, 0.9f32]],
+    DrawRectangle[454i32, 635i32, 32i32, 32i32, ColorTint[WHITE, RED]],
+    DrawRectangle[498i32, 635i32, 32i32, 32i32, ColorBrightness[BLUE, 0.3f32]],
+    DrawRectangle[366i32, 681i32, 32i32, 32i32, ColorContrast[GREEN, 0.5f32]],
+    DrawRectangle[410i32, 681i32, 32i32, 32i32, ColorAlpha[VIOLET, 0.5f32]],
+    DrawRectangle[454i32, 681i32, 32i32, 32i32, ColorAlphaBlend[RAYWHITE, MAROON, WHITE]],
+    DrawRectangle[498i32, 681i32, 32i32, 32i32, ColorLerp[BLACK, WHITE, 0.75f32]]
+  ]];
+
+@Def[draw_collision, [mouse : Vector2] : nil,
+  @Block[
+    card["collision", 670i32, 583i32],
+    DrawRectangleRec[TARGET, LIGHTGRAY],
+    DrawText["move the mouse here", 700i32, 724i32, 14i32, DARKGRAY],
+    @Let[centerX, ClampF32[Vec2X[mouse], 707.0f32, 933.0f32]],
+    @Let[centerY, ClampF32[Vec2Y[mouse], 650.0f32, 711.0f32]],
+    @Let[box, Rect[SubF32[centerX, 25.0f32], SubF32[centerY, 25.0f32],
+      MOUSE_SIZE, MOUSE_SIZE]],
+    @Let[hit, CheckCollisionRecs[box, TARGET]],
+    DrawRectangleLinesEx[box, 2.0f32, @If[hit, RED, BLACK]],
+    @If[hit,
+      @Block[
+        @Let[overlap, GetCollisionRec[box, TARGET]],
+        DrawRectangleRec[overlap, Fade[RED, 0.3f32]]
+      ],
+      nil]
+  ]];
+
+@Def[frame, [font : Font] : nil,
+  @If[WindowShouldClose[],
+    nil,
+    @Block[
+      @Let[mouse, GetMousePosition[]],
+      BeginDrawing[],
+      ClearBackground[RAYWHITE],
+      draw_lines[],
+      draw_triangles[],
+      draw_rectangles[],
+      draw_gradients[],
+      draw_polygons[],
+      draw_circles[],
+      draw_sectors[],
+      draw_ellipses[],
+      draw_rings[],
+      draw_text_samples[font],
+      draw_colors[],
+      draw_collision[mouse],
+      EndDrawing[],
+      @If[IsKeyPressed[KEY_S], @Block[TakeScreenshot[SHOT_PATH], nil], nil],
+      frame[font]
+    ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Assert[EqualF32[Vec2Length[Vec2[3.0f32, 4.0f32]], 5.0f32], "Vec2Length"],
+    @Assert[EqualF32[Vec2Distance[Vec2[0.0f32, 0.0f32], Vec2[3.0f32, 4.0f32]], 5.0f32],
+      "Vec2Distance"],
+    @Assert[EqualF32[Vec2X[Vec2Add[Vec2[1.0f32, 2.0f32], Vec2[3.0f32, 4.0f32]]], 4.0f32],
+      "Vec2Add"],
+    @Assert[EqualF32[Vec2Y[Vec2Subtract[Vec2[5.0f32, 5.0f32], Vec2[3.0f32, 4.0f32]]], 1.0f32],
+      "Vec2Subtract"],
+    @Assert[EqualF32[Vec2X[Vec2Scale[Vec2[2.0f32, 3.0f32], 2.0f32]], 4.0f32], "Vec2Scale"],
+    @Let[box, Rect[10.0f32, 20.0f32, 30.0f32, 40.0f32]],
+    @Assert[EqualF32[RectX[box], 10.0f32], "RectX"],
+    @Assert[EqualF32[RectY[box], 20.0f32], "RectY"],
+    @Assert[EqualF32[RectWidth[box], 30.0f32], "RectWidth"],
+    @Assert[EqualF32[RectHeight[box], 40.0f32], "RectHeight"],
+    @Assert[EqualF32[Vec2X[RectPosition[box]], 10.0f32], "RectPosition"],
+    @Assert[EqualF32[Vec2Y[RectSize[box]], 40.0f32], "RectSize"],
+    @Assert[EqualU32[ColorToInt[RED], 3861460991u32], "ColorToInt"],
+    @Assert[ColorIsEqual[GetColor[0xE62937FFu32], RED], "GetColor"],
+    @Assert[ColorIsEqual[ColorLerp[BLACK, WHITE, 1.0f32], WHITE], "ColorLerp"],
+    @Assert[CheckCollisionRecs[Rect[0.0f32, 0.0f32, 10.0f32, 10.0f32],
+      Rect[5.0f32, 5.0f32, 10.0f32, 10.0f32]], "CheckCollisionRecs"],
+    @Assert[CheckCollisionCircles[Vec2[0.0f32, 0.0f32], 5.0f32,
+      Vec2[8.0f32, 0.0f32], 5.0f32], "CheckCollisionCircles"],
+    @Assert[CheckCollisionCircleRec[Vec2[0.0f32, 0.0f32], 5.0f32,
+      Rect[3.0f32, 3.0f32, 10.0f32, 10.0f32]], "CheckCollisionCircleRec"],
+    @Assert[CheckCollisionCircleLine[Vec2[0.0f32, 0.0f32], 5.0f32,
+      Vec2[-10.0f32, 0.0f32], Vec2[10.0f32, 0.0f32]], "CheckCollisionCircleLine"],
+    @Assert[CheckCollisionPointRec[Vec2[5.0f32, 5.0f32],
+      Rect[0.0f32, 0.0f32, 10.0f32, 10.0f32]], "CheckCollisionPointRec"],
+    @Assert[CheckCollisionPointCircle[Vec2[0.0f32, 0.0f32],
+      Vec2[1.0f32, 0.0f32], 5.0f32], "CheckCollisionPointCircle"],
+    @Assert[CheckCollisionPointTriangle[Vec2[0.0f32, 0.0f32],
+      Vec2[-1.0f32, -1.0f32], Vec2[1.0f32, -1.0f32], Vec2[0.0f32, 1.0f32]],
+      "CheckCollisionPointTriangle"],
+    @Assert[CheckCollisionPointLine[Vec2[0.0f32, 1.0f32],
+      Vec2[-1.0f32, 0.0f32], Vec2[1.0f32, 0.0f32], 2i32], "CheckCollisionPointLine"],
+    @Let[_, CreateDirectoryAll[SHOT_DIR]],
+    InitWindow[SCREEN_WIDTH, SCREEN_HEIGHT, "raylib [shapes] example - basics"],
+    SetTargetFPS[FPS],
+    @Let[font, GetFontDefault[]],
+    @Assert[GreaterI32[FontBaseSize[font], 0i32], "默认字体"],
+    @Assert[GreaterF32[Vec2X[MeasureTextEx[font, "text", 20.0f32, 1.0f32]], 0.0f32],
+      "文本宽度"],
+    frame[font]
+  ]];

@@ -1,0 +1,6 @@
+target/
+tmp/
+.DS_Store
+bench/results/
+plugins/*/plugin/
+plugins/*/vendor/

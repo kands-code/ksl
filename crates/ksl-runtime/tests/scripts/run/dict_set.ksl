@@ -1,0 +1,95 @@
+# 字典与集合: 键值容器与基础标量集合.
+
+@Def[i64ListEq, [xs : List[i64], ys : List[i64]] : bool,
+  @Which[
+    {(@IsListEmpty[xs], @IsListEmpty[ys]),
+     (@IsListEmpty[ys], false)},
+    And[
+      EqualI64[@ListHead[xs], @ListHead[ys]],
+      i64ListEq[@ListTail[xs], @ListTail[ys]]
+    ]
+  ]
+];
+
+@Def[stringListEq, [xs : List[string], ys : List[string]] : bool,
+  @Which[
+    {(@IsListEmpty[xs], @IsListEmpty[ys]),
+     (@IsListEmpty[ys], false)},
+    And[
+      EqualString[@ListHead[xs], @ListHead[ys]],
+      stringListEq[@ListTail[xs], @ListTail[ys]]
+    ]
+  ]
+];
+
+# 字典
+@Let[empty : Dict[string, i64], @Dict[]];
+@Assert[EqualU64[@DictLength[empty], 0u64], "空字典长度"];
+
+@Let[d, @Dict[("a", 1), ("b", 2)]];
+@Let[one : Dict[string, i64], @Dict[("a", 1)]];
+@Let[d1, @DictPut[d, "c", 3]];
+@Assert[EqualI64[@OptionGet[@DictLookup[d1, "b"], 0], 2], "字典查找"];
+@Assert[EqualU64[@DictLength[d1], 3u64], "字典长度"];
+@Assert[EqualBool[@DictHas[d1, "c"], true], "字典含键"];
+@Assert[
+  stringListEq[@DictKeys[@DictFromEntries[@DictEntries[d1]]], {"a", "b", "c"}],
+  "字典条目还原"
+];
+@Assert[
+  stringListEq[
+    @DictKeys[@DictFilter[d, @Fn[[k : string, v : i64] : bool, GreaterI64[v, 1]]]],
+    {"b"}
+  ],
+  "字典按值过滤"
+];
+@Assert[
+  EqualI64[AddI64[@DictGet[one, "a", DivideI64[1, 0]], @DictGet[one, "b", 99]], 100],
+  "字典缺省值不参与求值"
+];
+@Assert[
+  stringListEq[
+    @ListFlatten[{
+      @DictKeys[d],
+      @ListMap[@DictValues[d], @Fn[[n : i64] : string, f"{n}"]]
+    }],
+    {"a", "b", "1", "2"}
+  ],
+  "字典键与值的顺序"
+];
+
+@Let[merged, @DictMerge[@Dict[("x", 1), ("y", 2)], @Dict[("y", 8), ("z", 9)]]];
+@Assert[EqualI64[@OptionGet[@DictLookup[merged, "y"], 0], 8], "字典合并覆盖同名键"];
+@Assert[EqualBool[@DictHas[@DictRemove[d, "a"], "a"], false], "字典删除键"];
+@Assert[EqualBool[@DictHas[d, "a"], true], "删除不改变原字典"];
+
+@Let[updated, @DictUpdate[one, "a", @Fn[[n : i64] : i64, AddI64[n, 1]], DivideI64[1, 0]]];
+@Let[added, @DictUpdate[updated, "b", @Fn[[n : i64] : i64, AddI64[n, 1]], 10]];
+@Assert[EqualI64[@OptionGet[@DictLookup[added, "a"], 0], 2], "字典更新已有键"];
+@Assert[EqualI64[@OptionGet[@DictLookup[added, "b"], 0], 10], "字典更新新增键"];
+
+# 集合
+@Let[empty_set : Set[i64], @Set[]];
+@Assert[EqualU64[@SetLength[empty_set], 0u64], "空集合长度"];
+@Assert[@IsSetEmpty[empty_set], "空集合判定"];
+
+@Let[s0, @Set[1, 2, 3]];
+@Let[s1, @SetInsert[s0, 4]];
+@Assert[EqualBool[@SetHas[s1, 4], true], "集合插入"];
+@Assert[EqualBool[@SetHas[s1, 2], true], "插入不删除原有元素"];
+@Assert[EqualBool[@SetHas[@SetRemove[s1, 2], 2], false], "集合删除"];
+@Assert[EqualBool[@SetHas[s1, 2], true], "删除不改变原集合"];
+
+@Let[a, @Set[1, 2, 3]];
+@Let[b, @Set[3, 4]];
+@Assert[i64ListEq[@SetItems[@SetUnion[a, b]], {1, 2, 3, 4}], "集合并集"];
+@Assert[i64ListEq[@SetItems[@SetIntersect[a, b]], {3}], "集合交集"];
+@Assert[i64ListEq[@SetItems[@SetDifference[a, b]], {1, 2}], "集合差集"];
+@Assert[
+  i64ListEq[
+    @SetItems[@SetFilter[s1, @Fn[[n : i64] : bool, EqualI64[ModuloI64[n, 2], 1]]]],
+    {1, 3}
+  ],
+  "集合按奇偶过滤"
+];
+@Assert[i64ListEq[@SetItems[@SetFromList[{1, 2, 2, 3, 4}]], {1, 2, 3, 4}], "集合去重"];

@@ -1,0 +1,603 @@
+; ksl 语法高亮查询.
+;
+; 约定: 默认规则在前, 具体规则在后; 同一节点被多条规则捕获时, 后者生效.
+
+; 变量: 默认规则, 其余标识符规则在其后覆盖.
+(identifier) @variable
+
+; 核心与 Actor 特殊形式名.
+; BEGIN special forms
+[
+  "Assert"
+  "Block"
+  "CancelTimer"
+  "Continue"
+  "Data"
+  "DataGet"
+  "Def"
+  "Exit"
+  "Export"
+  "Fix"
+  "Fn"
+  "Halt"
+  "Handler"
+  "If"
+  "Join"
+  "Kill"
+  "Let"
+  "Link"
+  "Main"
+  "Match"
+  "Panic"
+  "PidSerial"
+  "Receive"
+  "Send"
+  "SetTimer"
+  "Sleep"
+  "Spawn"
+  "SpawnDetached"
+  "Todo"
+  "Unreachable"
+  "Use"
+  "Which"
+] @keyword
+; END special forms
+
+; 容器构造器与操作族.
+; BEGIN container operations
+[
+  "Dict"
+  "DictEntries"
+  "DictFilter"
+  "DictFromEntries"
+  "DictGet"
+  "DictHas"
+  "DictKeys"
+  "DictLength"
+  "DictLookup"
+  "DictMerge"
+  "DictPut"
+  "DictRemove"
+  "DictUpdate"
+  "DictValues"
+  "Fst"
+  "IsDictEmpty"
+  "IsErr"
+  "IsListEmpty"
+  "IsNone"
+  "IsOk"
+  "IsSetEmpty"
+  "IsSome"
+  "ListAll"
+  "ListAny"
+  "ListAppend"
+  "ListChunk"
+  "ListDrop"
+  "ListDropWhile"
+  "ListFilter"
+  "ListFindIndex"
+  "ListFlatten"
+  "ListFold"
+  "ListGet"
+  "ListHead"
+  "ListLength"
+  "ListLookup"
+  "ListMap"
+  "ListMapIndexed"
+  "ListPrefixFold"
+  "ListPrepend"
+  "ListRepeat"
+  "ListReverse"
+  "ListRiffle"
+  "ListTail"
+  "ListTake"
+  "ListTakeWhile"
+  "ListUpdate"
+  "ListWindow"
+  "ListZip"
+  "ListZipWith"
+  "OptionAndThen"
+  "OptionGet"
+  "OptionMap"
+  "ResultAndThen"
+  "ResultGet"
+  "ResultMap"
+  "ResultOrElse"
+  "Set"
+  "SetDifference"
+  "SetFilter"
+  "SetFromList"
+  "SetHas"
+  "SetInsert"
+  "SetIntersect"
+  "SetItems"
+  "SetLength"
+  "SetRemove"
+  "SetUnion"
+  "Snd"
+] @keyword.operator
+; END container operations
+
+; 字面量关键字.
+[
+  (true_literal)
+  (false_literal)
+  (nil_literal)
+] @constant.builtin
+
+; 类型.
+(type_name) @type
+(generic_type name: (identifier) @type)
+(export_type name: (identifier) @type)
+(use_item "^" (pair (identifier) @type (identifier) @type))
+; `Fn` 在类型位置是类型构造器, 不是特殊形式名.
+(fn_type "Fn" @type.constructor)
+
+; 函数与构造器.
+(call function: (identifier) @function)
+(def_form name: (identifier) @function)
+(data_form name: (identifier) @type)
+(qualified_name qualifier: (identifier) @type)
+(qualified_name name: (identifier) @constructor)
+(qualified_pattern qualifier: (identifier) @type)
+(qualified_pattern variant: (identifier) @constructor)
+(unqualified_pattern variant: (identifier) @constructor)
+(data_variant name: (identifier) @constructor)
+
+; 内置函数.
+;
+; 名单由 `crates/ksl-treesitter/scripts/gen-lists.sh` 生成, 一致性由
+; `crates/ksl-treesitter/tests/names.rs` 校验.
+; 内置名是保留名, 不能用作绑定, 故按名字匹配不会误伤同名局部变量.
+;
+; BEGIN builtins
+((identifier) @function.builtin
+ (#any-of? @function.builtin
+  "AbsF32"
+  "AbsF64"
+  "AbsI32"
+  "AbsI64"
+  "AddDay"
+  "AddF32"
+  "AddF64"
+  "AddHour"
+  "AddI32"
+  "AddI64"
+  "AddMillisecond"
+  "AddMinute"
+  "AddMonth"
+  "AddSecond"
+  "AddU32"
+  "AddU64"
+  "AddU8"
+  "AddWeek"
+  "AddYear"
+  "And"
+  "AppendFile"
+  "AppendFileBytes"
+  "ArcCosF32"
+  "ArcCosF64"
+  "ArcCoshF32"
+  "ArcCoshF64"
+  "ArcSinF32"
+  "ArcSinF64"
+  "ArcSinhF32"
+  "ArcSinhF64"
+  "ArcTan2F32"
+  "ArcTan2F64"
+  "ArcTanF32"
+  "ArcTanF64"
+  "ArcTanhF32"
+  "ArcTanhF64"
+  "Args"
+  "BitAndI32"
+  "BitAndI64"
+  "BitAndU32"
+  "BitAndU64"
+  "BitAndU8"
+  "BitOrI32"
+  "BitOrI64"
+  "BitOrU32"
+  "BitOrU64"
+  "BitOrU8"
+  "BitReverseI32"
+  "BitReverseI64"
+  "BitReverseU32"
+  "BitReverseU64"
+  "BitReverseU8"
+  "BitXorI32"
+  "BitXorI64"
+  "BitXorU32"
+  "BitXorU64"
+  "BitXorU8"
+  "CeilingF32"
+  "CeilingF64"
+  "CharToU32"
+  "CharToU64"
+  "CharsToString"
+  "Close"
+  "ClosedFile"
+  "CommandOutputStatus"
+  "CommandOutputStderr"
+  "CommandOutputStdout"
+  "CopyFile"
+  "CosF32"
+  "CosF64"
+  "CoshF32"
+  "CoshF64"
+  "CreateDirectory"
+  "CreateDirectoryAll"
+  "DateDay"
+  "DateMonth"
+  "DateTimeFromParts"
+  "DateTimeInZone"
+  "DateTimeToEpochMillis"
+  "DateTimeToString"
+  "DateWeekday"
+  "DateYear"
+  "DecodeUtf8"
+  "DivideF32"
+  "DivideF64"
+  "DivideI32"
+  "DivideI64"
+  "DivideU32"
+  "DivideU64"
+  "DivideU8"
+  "EmptyRegexMatch"
+  "EncodeUtf8"
+  "EnterRawMode"
+  "EpochMillisToDateTime"
+  "EqualBool"
+  "EqualChar"
+  "EqualDateTime"
+  "EqualF32"
+  "EqualF64"
+  "EqualI32"
+  "EqualI64"
+  "EqualString"
+  "EqualU32"
+  "EqualU64"
+  "EqualU8"
+  "ExitRawMode"
+  "F32ToF64"
+  "F64ToF32"
+  "FloorF32"
+  "FloorF64"
+  "Flush"
+  "GetCurrentDirectory"
+  "GetEnv"
+  "GetModuleDirectory"
+  "GreaterDateTime"
+  "GreaterF32"
+  "GreaterF64"
+  "GreaterI32"
+  "GreaterI64"
+  "GreaterOrEqualDateTime"
+  "GreaterOrEqualF32"
+  "GreaterOrEqualF64"
+  "GreaterOrEqualI32"
+  "GreaterOrEqualI64"
+  "GreaterOrEqualU32"
+  "GreaterOrEqualU64"
+  "GreaterOrEqualU8"
+  "GreaterU32"
+  "GreaterU64"
+  "GreaterU8"
+  "I32ToF32"
+  "I32ToF64"
+  "I32ToI64"
+  "I32ToU32"
+  "I32ToU64"
+  "I32ToU8"
+  "I64ToF32"
+  "I64ToF64"
+  "I64ToI32"
+  "I64ToU32"
+  "I64ToU64"
+  "I64ToU8"
+  "IsAlphanumeric"
+  "IsAsciiDigit"
+  "IsDirectory"
+  "IsFile"
+  "IsLetter"
+  "IsLowercase"
+  "IsPathExists"
+  "IsUppercase"
+  "IsWhitespace"
+  "JoinPath"
+  "LessDateTime"
+  "LessF32"
+  "LessF64"
+  "LessI32"
+  "LessI64"
+  "LessOrEqualDateTime"
+  "LessOrEqualF32"
+  "LessOrEqualF64"
+  "LessOrEqualI32"
+  "LessOrEqualI64"
+  "LessOrEqualU32"
+  "LessOrEqualU64"
+  "LessOrEqualU8"
+  "LessU32"
+  "LessU64"
+  "LessU8"
+  "ListDirectory"
+  "ModuloI32"
+  "ModuloI64"
+  "ModuloU32"
+  "ModuloU64"
+  "ModuloU8"
+  "MulF32"
+  "MulF64"
+  "MulI32"
+  "MulI64"
+  "MulU32"
+  "MulU64"
+  "MulU8"
+  "NegF32"
+  "NegF64"
+  "NegI32"
+  "NegI64"
+  "Not"
+  "Now"
+  "NowUtc"
+  "OpenAppend"
+  "OpenRead"
+  "OpenWrite"
+  "Or"
+  "ParseDateTime"
+  "ParseF32"
+  "ParseF64"
+  "ParseI32"
+  "ParseI64"
+  "ParseU32"
+  "ParseU64"
+  "PowerF32"
+  "PowerF64"
+  "Print"
+  "PrintError"
+  "QuotientI32"
+  "QuotientI64"
+  "ReadChunk"
+  "ReadFile"
+  "ReadFileBytes"
+  "ReadKey"
+  "ReadLine"
+  "ReadLineFrom"
+  "RegexCaptureNames"
+  "RegexCompile"
+  "RegexFind"
+  "RegexFindAll"
+  "RegexIsMatch"
+  "RegexMatchEnd"
+  "RegexMatchGroup"
+  "RegexMatchNamedGroup"
+  "RegexMatchStart"
+  "RegexMatchText"
+  "RegexReplace"
+  "RegexReplaceAll"
+  "RegexSplit"
+  "RemainderI32"
+  "RemainderI64"
+  "RemoveDirectory"
+  "RemoveFile"
+  "RenamePath"
+  "RoundF32"
+  "RoundF64"
+  "RunCommand"
+  "ShiftLeftI32"
+  "ShiftLeftI64"
+  "ShiftLeftU32"
+  "ShiftLeftU64"
+  "ShiftLeftU8"
+  "ShiftRightI32"
+  "ShiftRightI64"
+  "ShiftRightU32"
+  "ShiftRightU64"
+  "ShiftRightU8"
+  "SinF32"
+  "SinF64"
+  "SinhF32"
+  "SinhF64"
+  "SocketClose"
+  "SocketIsClosed"
+  "SocketPeer"
+  "SocketRead"
+  "SocketReadAll"
+  "SocketReadExact"
+  "SocketReadLine"
+  "SocketShutdownWrite"
+  "SocketWrite"
+  "SocketWriteAll"
+  "SocketWriteLine"
+  "SqrtF32"
+  "SqrtF64"
+  "StringContains"
+  "StringEndsWith"
+  "StringIndexOf"
+  "StringJoin"
+  "StringLength"
+  "StringLines"
+  "StringLowercase"
+  "StringReplace"
+  "StringReplaceAll"
+  "StringSlice"
+  "StringSplit"
+  "StringStartsWith"
+  "StringToChars"
+  "StringTrim"
+  "StringTrimEnd"
+  "StringTrimStart"
+  "StringUppercase"
+  "StringWords"
+  "SubDay"
+  "SubF32"
+  "SubF64"
+  "SubHour"
+  "SubI32"
+  "SubI64"
+  "SubMillisecond"
+  "SubMinute"
+  "SubMonth"
+  "SubSecond"
+  "SubU32"
+  "SubU64"
+  "SubU8"
+  "SubWeek"
+  "SubYear"
+  "TanF32"
+  "TanF64"
+  "TanhF32"
+  "TanhF64"
+  "TcpAccept"
+  "TcpCloseListener"
+  "TcpConnect"
+  "TcpListen"
+  "TcpLocalPort"
+  "TimeHour"
+  "TimeMillisecond"
+  "TimeMinute"
+  "TimeSecond"
+  "TimeZoneName"
+  "TimeZoneOffsetMinutes"
+  "TruncateF32"
+  "TruncateF64"
+  "U32ToChar"
+  "U32ToF32"
+  "U32ToF64"
+  "U32ToI32"
+  "U32ToI64"
+  "U32ToU64"
+  "U32ToU8"
+  "U64ToChar"
+  "U64ToF32"
+  "U64ToF64"
+  "U64ToI32"
+  "U64ToI64"
+  "U64ToU32"
+  "U64ToU8"
+  "U8ToI32"
+  "U8ToI64"
+  "U8ToU32"
+  "U8ToU64"
+  "WriteBytes"
+  "WriteFile"
+  "WriteFileBytes"
+  "WriteString"
+))
+; END builtins
+
+; 内置类型名.
+;
+; 原始类型与参数化类型构造器按名字识别; 其余类型名保持 @type.
+;
+; BEGIN primitive types
+((type_name) @type.builtin
+ (#any-of? @type.builtin
+  "bool"
+  "char"
+  "f32"
+  "f64"
+  "i32"
+  "i64"
+  "nil"
+  "string"
+  "u32"
+  "u64"
+  "u8"
+))
+((identifier) @type.builtin
+ (#any-of? @type.builtin
+  "bool"
+  "char"
+  "f32"
+  "f64"
+  "i32"
+  "i64"
+  "nil"
+  "string"
+  "u32"
+  "u64"
+  "u8"
+))
+; END primitive types
+
+; BEGIN type constructors
+((type_name) @type.constructor
+ (#any-of? @type.constructor
+  "Dict"
+  "Fn"
+  "Handler"
+  "List"
+  "Option"
+  "Pair"
+  "Pid"
+  "Result"
+  "Set"
+))
+((identifier) @type.constructor
+ (#any-of? @type.constructor
+  "Dict"
+  "Fn"
+  "Handler"
+  "List"
+  "Option"
+  "Pair"
+  "Pid"
+  "Result"
+  "Set"
+))
+; END type constructors
+
+; 形参与模式字段.
+(param name: (identifier) @variable.parameter)
+(pattern_field (identifier) @variable.parameter)
+
+; 字面量.
+;
+; 数字与字符用具名捕获. Helix, Neovim 与 Zed 按点分前缀逐级回退, 故
+; `constant.numeric.integer` 缺失时会落到上层样式; 单段名字无处可退.
+(integer) @constant.numeric.integer
+(i64_integer) @constant.numeric.integer
+(i32_integer) @constant.numeric.integer
+(u8_integer) @constant.numeric.integer
+(u32_integer) @constant.numeric.integer
+(u64_integer) @constant.numeric.integer
+(float) @constant.numeric.float
+(f64_float) @constant.numeric.float
+(f32_float) @constant.numeric.float
+(string) @string
+(char_literal) @constant.character
+(fstring) @string
+(raw_string) @string
+
+; 注释.
+(comment) @comment
+
+; 丢弃记号 `_`, 语义是"该值不使用". 沿用 Helix 对 Rust 中 `_` 的标法.
+(discard) @comment.unused
+
+; 前缀与分隔符.
+;
+; `@` 是特殊形式前缀, `^` 是类型提升符号, 二者都不是名字的一部分.
+; `/` 是类型限定名的分隔符, 相当于其他语言中限定名的 `.`.
+[
+  "@"
+  "^"
+] @punctuation.special
+
+[
+  "/"
+  ","
+  ";"
+  ":"
+] @punctuation.delimiter
+
+[
+  "["
+  "]"
+  "{"
+  "}"
+  "("
+  ")"
+] @punctuation.bracket

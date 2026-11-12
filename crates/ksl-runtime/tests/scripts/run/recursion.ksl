@@ -1,0 +1,20 @@
+# 递归: 自递归, 互递归与抽象机的调用深度契约.
+@Def[fact, [n : i64] : i64,
+  @If[LessOrEqualI64[n, 1], 1, MulI64[n, fact[SubI64[n, 1]]]]];
+@Def[fib, [n : i64] : i64,
+  @If[LessI64[n, 2], n, AddI64[fib[SubI64[n, 1]], fib[SubI64[n, 2]]]]];
+@Def[count, [n : i64] : i64,
+  @If[LessOrEqualI64[n, 0], 0, count[SubI64[n, 1]]]];
+@Def[sum, [n : i64] : i64,
+  @If[LessOrEqualI64[n, 0], 0, AddI64[1, sum[SubI64[n, 1]]]]];
+@Fix[
+  @Def[isEven, [n : u8] : bool, @If[EqualU8[n, 0u8], true, isOdd[SubU8[n, 1u8]]]],
+  @Def[isOdd, [n : u8] : bool, @If[EqualU8[n, 0u8], false, isEven[SubU8[n, 1u8]]]]
+];
+@Assert[EqualI64[fact[10], 3628800], "阶乘"];
+@Assert[EqualI64[fib[10], 55], "斐波那契"];
+@Assert[EqualBool[isEven[10u8], true], "互递归"];
+
+# 尾递归不增长调用栈; 非尾递归在抽象机深度内完成.
+@Assert[EqualI64[count[100000], 0], "尾递归"];
+@Assert[EqualI64[sum[100000], 100000], "非尾递归"];

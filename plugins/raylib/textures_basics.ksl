@@ -1,0 +1,103 @@
+# raylib textures 示例.
+#
+# 用 GenImageChecked 现场生成棋盘图像, 创建纹理并以卡片网格展示绘制方式.
+# 启动时校验图像与纹理数据; 按 S 把当前帧写到模块目录下的 tmp/textures_basics.png.
+
+@Use[{
+  InitWindow, CloseWindow, WindowShouldClose, SetTargetFPS, BeginDrawing, EndDrawing,
+  ClearBackground, DrawText, DrawFPS, TakeScreenshot, IsKeyPressed,
+  GenImageChecked, LoadTextureFromImage, LoadImageFromTexture, UnloadImage,
+  ImageWidth, ImageHeight, IsImageValid, GetImageColor,
+  TextureWidth, TextureHeight, IsTextureValid, UnloadTexture, SetTextureFilter,
+  SetTextureWrap, GenTextureMipmaps, DrawTexture, DrawTextureV, DrawTextureEx,
+  DrawTextureRec, DrawTexturePro, DrawRectangleLinesEx, Vec2, Rect, ColorIsEqual,
+  Fade, ^Texture, ^Image,
+  TEXTURE_FILTER_POINT, TEXTURE_FILTER_BILINEAR, TEXTURE_WRAP_REPEAT,
+  LIGHTGRAY, DARKGRAY, RAYWHITE, WHITE, RED, BLUE, KEY_S
+}, "raylib"];
+
+@Let[SCREEN_WIDTH, 1000i32];
+@Let[SCREEN_HEIGHT, 560i32];
+@Let[CHECKER_SIZE, 64i32];
+@Let[CARD_WIDTH, 300.0f32];
+@Let[CARD_HEIGHT, 210.0f32];
+@Let[SHOT_DIR, JoinPath[GetModuleDirectory[], "tmp"]];
+@Let[SHOT_PATH, JoinPath[SHOT_DIR, "textures_basics.png"]];
+
+@Def[card, [title : string, x : i32, y : i32] : nil,
+  @Block[
+    DrawRectangleLinesEx[
+      Rect[I32ToF32[x], I32ToF32[y], CARD_WIDTH, CARD_HEIGHT], 1.0f32, LIGHTGRAY],
+    DrawText[title, AddI32[x, 12i32], AddI32[y, 8i32], 18i32, DARKGRAY]
+  ]];
+
+@Def[draw_samples, [texture : Texture] : nil,
+  @Block[
+    card["DrawTexture", 30i32, 80i32],
+    DrawTexture[texture, 148i32, 150i32, WHITE],
+    card["DrawTextureEx 15 deg 1.5x", 350i32, 80i32],
+    DrawTextureEx[texture, Vec2[440.0f32, 130.0f32], 15.0f32, 1.5f32, WHITE],
+    card["DrawTextureRec 48x48 crop", 670i32, 80i32],
+    DrawTextureRec[texture, Rect[0.0f32, 0.0f32, 48.0f32, 48.0f32],
+      Vec2[796.0f32, 150.0f32], WHITE],
+    card["DrawTexturePro to 160x120", 30i32, 310i32],
+    DrawTexturePro[texture, Rect[0.0f32, 0.0f32, 64.0f32, 64.0f32],
+      Rect[180.0f32, 415.0f32, 160.0f32, 120.0f32], Vec2[80.0f32, 60.0f32], 10.0f32, WHITE],
+    card["wrap 3x3 tiles", 350i32, 310i32],
+    DrawTexturePro[texture, Rect[0.0f32, 0.0f32, 192.0f32, 192.0f32],
+      Rect[420.0f32, 345.0f32, 150.0f32, 150.0f32], Vec2[0.0f32, 0.0f32], 0.0f32, WHITE],
+    card["tint", 670i32, 310i32],
+    DrawTexture[texture, 730i32, 380i32, WHITE],
+    DrawTexture[texture, 830i32, 380i32, Fade[BLUE, 0.6f32]]
+  ]];
+
+@Def[frame, [texture : Texture] : nil,
+  @If[WindowShouldClose[],
+    nil,
+    @Block[
+      BeginDrawing[],
+      ClearBackground[RAYWHITE],
+      DrawText["raylib [textures] example - basics", 30i32, 24i32, 22i32, DARKGRAY],
+      DrawText["64 x 64 checker, bilinear filter, repeat wrap", 30i32, 52i32, 16i32,
+        DARKGRAY],
+      draw_samples[texture],
+      DrawFPS[900i32, 24i32],
+      EndDrawing[],
+      @If[IsKeyPressed[KEY_S], @Block[TakeScreenshot[SHOT_PATH], nil], nil],
+      frame[texture]
+    ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[_, CreateDirectoryAll[SHOT_DIR]],
+    InitWindow[SCREEN_WIDTH, SCREEN_HEIGHT, "raylib [textures] example - basics"],
+    SetTargetFPS[60i32],
+    @Let[image, GenImageChecked[CHECKER_SIZE, CHECKER_SIZE, 8i32, 8i32, RED, WHITE]],
+    @Assert[IsImageValid[image], "图像应有效"],
+    @Assert[EqualI32[ImageWidth[image], CHECKER_SIZE], "图像宽度"],
+    @Assert[EqualI32[ImageHeight[image], CHECKER_SIZE], "图像高度"],
+    @Assert[ColorIsEqual[GetImageColor[image, 0i32, 0i32], RED], "棋盘首格"],
+    @Match[LoadTextureFromImage[image], {
+      (Result/Ok[texture], @Block[
+        @Assert[IsTextureValid[texture], "纹理应有效"],
+        @Assert[EqualI32[TextureWidth[texture], CHECKER_SIZE], "纹理宽度"],
+        @Assert[EqualI32[TextureHeight[texture], CHECKER_SIZE], "纹理高度"],
+        SetTextureFilter[texture, TEXTURE_FILTER_POINT],
+        SetTextureWrap[texture, TEXTURE_WRAP_REPEAT],
+        GenTextureMipmaps[texture],
+        SetTextureFilter[texture, TEXTURE_FILTER_BILINEAR],
+        @Match[LoadImageFromTexture[texture], {
+          (Result/Ok[readback], @Block[
+            @Assert[ColorIsEqual[GetImageColor[readback, 0i32, 0i32], RED], "纹理读回首格"],
+            UnloadImage[readback]
+          ]),
+          (Result/Err[error], Print[StringJoin[{error, "\n"}]])
+        }],
+        UnloadImage[image],
+        frame[texture],
+        UnloadTexture[texture]
+      ]),
+      (Result/Err[error], Print[StringJoin[{error, "\n"}]])
+    }],
+    CloseWindow[]
+  ]];

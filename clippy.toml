@@ -1,0 +1,8 @@
+# clippy 配置.
+#
+# 测试代码允许 unwrap 与 expect.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# 允许父模块通配导入.
+allowed-wildcard-imports = ["super"]

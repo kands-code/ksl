@@ -1,0 +1,21 @@
+[package]
+name = "ksl-frontend"
+description = "ksl 词法, 语法与类型检查"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ena.workspace = true
+imbl.workspace = true
+indexmap.workspace = true
+ksl-base.workspace = true
+ksl-catalog.workspace = true
+ksl-diagnostics.workspace = true
+ksl-typed.workspace = true
+unicode-ident.workspace = true
+winnow.workspace = true
+
+[lints]
+workspace = true

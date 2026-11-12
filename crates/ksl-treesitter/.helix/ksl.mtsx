@@ -1,0 +1,276 @@
+// require MT >= 2.26.9
+//
+// ksl 的 MT 管理器语法高亮.
+//
+// 特殊形式, 容器操作, 内置函数与类型名单由 `scripts/gen-lists.sh` 生成,
+// 不要手工修改 BEGIN/END 之间的内容. 原始字符串的终点复用起点捕获的
+// 井号数量, 依赖 MT 2.26.9 的 export/var 功能.
+{
+    name: ["ksl", ".ksl"]
+    comment: {startsWith: "#"}
+    bracketPairs: ["{}", "[]", "()"]
+    defines: [
+        // 原始类型.
+        "primitiveTypes": keywordsToRegex(
+            // BEGIN primitive types
+            "bool char f32 f64 i32 i64 nil string"
+            "u32 u64 u8"
+            // END primitive types
+        )
+        // 内置参数化类型构造器.
+        "typeConstructors": keywordsToRegex(
+            // BEGIN type constructors
+            "Dict Fn Handler List Option Pair Pid Result"
+            "Set"
+            // END type constructors
+        )
+        // 内置 Data 与不透明类型.
+        "namedTypes": keywordsToRegex(
+            // BEGIN named types
+            "CommandError CommandInput CommandOption CommandOutput CommandStatus DateTime ExitReason File"
+            "FileError InputError KeyEvent NumberParseError Regex RegexError RegexMatch Socket"
+            "SocketError TcpListener TimeError Utf8Error"
+            // END named types
+        )
+        // 类型表达式: 原始类型, 参数化构造器, 命名类型与可嵌套的 `[...]`.
+        "kslType": [
+            {match: include("primitiveTypes"), 0: "type"}
+            {match: include("typeConstructors"), 0: "kslTypeConstructor"}
+            {match: include("namedTypes"), 0: "kslType"}
+            {match: /[\p{L}_][\p{L}\p{N}_]*/, 0: "kslType"}
+            {
+                start: {match: /\[/}
+                end: {match: /\]/}
+                contains: [
+                    {include: "kslType"}
+                    {match: /:/, 0: "delimiter"}
+                    {match: /,/, 0: "delimiter"}
+                ]
+            }
+            {match: /:/, 0: "delimiter"}
+        ]
+        // 类型标注 `: Type`; 嵌套括号由 kslType 处理.
+        "annotation": {
+            start: {match: /:/, 0: "operator"}
+            end: {match: /(,)|[\]}]/, 1: "delimiter"}
+            contains: [
+                {match: /#.*/, 0: "comment"}
+                {include: "kslType"}
+            ]
+        }
+    ]
+    styles: [
+        // `/` 是类型限定名的分隔符; MT 无独立内置风格, 沿用 operator.
+        "delimiter" > "operator"
+        "kslFunction", #007A7A, #56B6C2, @B
+        "kslConstructor", #B35C00, #E5C07B
+        "kslType", #6A3D9A, #C678DD
+        "kslTypeConstructor", #C2185B, #FF79C6
+    ]
+    contains: [
+        // 原始字符串: r"...", r#"..."#, r##"..."## 等.
+        {
+            start: {
+                match: /r(#*)"/
+                export: 1 => "rawHashes"
+                0: "string"
+            }
+            end: {match: /"/ + var("rawHashes"), 0: "string"}
+            style: "string"
+        }
+
+        // 格式化字符串: 整体按字符串处理, 插值内容单独着色.
+        // 插值匹配器从 `{` 开始并消费到 `}`, 避免其中的引号提前结束字符串.
+        {
+            start: {match: /f"/}
+            end: {match: /"/}
+            style: "string"
+            contains: [
+                {match: /\\u\{[0-9A-Fa-f]+\}/, 0: "strEscape"}
+                {match: /\\./, 0: "strEscape"}
+                {match: /\{\{|\}\}/, 0: "strEscape"}
+                {match: /\{([^{}]*)\}/, 1: "variable"}
+            ]
+        }
+
+        // 普通字符串与字符字面量.
+        {
+            start: {match: /"/}
+            end: {match: /"/}
+            style: "string"
+            contains: [
+                {match: /\\u\{[0-9A-Fa-f]+\}/, 0: "strEscape"}
+                {match: /\\./, 0: "strEscape"}
+            ]
+        }
+        {
+            start: {match: /'/}
+            end: {match: /'/}
+            style: "string"
+            contains: [
+                {match: /\\u\{[0-9A-Fa-f]+\}/, 0: "strEscape"}
+                {match: /\\./, 0: "strEscape"}
+            ]
+        }
+
+        // 数字: 二进制, 十进制, 十六进制, 浮点与指数; 完整类型后缀共用同一风格.
+        {
+            number: "2|10|16|F|E"
+            iSuffixes: "i64|i32|u8|u32|u64"
+            fSuffixes: "f32|f64"
+            style: "number"
+        }
+
+        // 声明名: @Data 的类型名与 @Def 的函数名.
+        // @Data 的范围到变体块的 `}`; 变体名按构造器着色, 字段类型由 `kslType` 递归处理.
+        {
+            start: {
+                match: /(@)\s*(Data)\s*\[\s*([\p{L}_][\p{L}\p{N}_]*)/
+                1: "operator"
+                2: "keyword"
+                3: "kslType"
+            }
+            end: {match: /\}/}
+            contains: [
+                {match: /#.*/, 0: "comment"}
+                {match: /,/, 0: "delimiter"}
+                {
+                    start: {
+                        match: /([\p{L}_][\p{L}\p{N}_]*)\s*\[/
+                        1: "kslConstructor"
+                    }
+                    end: {match: /\]/}
+                    contains: [
+                        {match: /#.*/, 0: "comment"}
+                        {include: "kslType"}
+                        {match: /,/, 0: "delimiter"}
+                    ]
+                }
+            ]
+        }
+        {match: /(@)\s*(Def)\s*\[\s*([\p{L}_][\p{L}\p{N}_]*)/, 1: "operator", 2: "keyword", 3: "kslFunction"}
+
+        // 字面量关键字.
+        {match: keywordsToRegex("true false nil"), 0: "constant"}
+
+        // 核心, Actor 与命名注册特殊形式.
+        {match: keywordsToRegex(
+            // BEGIN special forms
+            "Assert Block CancelTimer Continue Data DataGet Def Exit"
+            "Export Fix Fn Halt Handler If Join Kill"
+            "Let Link Main Match Panic PidSerial Receive Send"
+            "SetTimer Sleep Spawn SpawnDetached Todo Unreachable Use Which"
+            // END special forms
+        ), 0: "keyword"}
+
+        // 容器构造器与操作族.
+        {match: keywordsToRegex(
+            // BEGIN operations
+            "Dict DictEntries DictFilter DictFromEntries DictGet DictHas DictKeys DictLength"
+            "DictLookup DictMerge DictPut DictRemove DictUpdate DictValues Fst IsDictEmpty"
+            "IsErr IsListEmpty IsNone IsOk IsSetEmpty IsSome ListAll ListAny"
+            "ListAppend ListChunk ListDrop ListDropWhile ListFilter ListFindIndex ListFlatten ListFold"
+            "ListGet ListHead ListLength ListLookup ListMap ListMapIndexed ListPrefixFold ListPrepend"
+            "ListRepeat ListReverse ListRiffle ListTail ListTake ListTakeWhile ListUpdate ListWindow"
+            "ListZip ListZipWith OptionAndThen OptionGet OptionMap ResultAndThen ResultGet ResultMap"
+            "ResultOrElse Set SetDifference SetFilter SetFromList SetHas SetInsert SetIntersect"
+            "SetItems SetLength SetRemove SetUnion Snd"
+            // END operations
+        ), 0: "keyword2"}
+
+        // 内置函数.
+        {match: keywordsToRegex(
+            // BEGIN builtins
+            "AbsF32 AbsF64 AbsI32 AbsI64 AddDay AddF32 AddF64 AddHour"
+            "AddI32 AddI64 AddMillisecond AddMinute AddMonth AddSecond AddU32 AddU64"
+            "AddU8 AddWeek AddYear And AppendFile AppendFileBytes ArcCosF32 ArcCosF64"
+            "ArcCoshF32 ArcCoshF64 ArcSinF32 ArcSinF64 ArcSinhF32 ArcSinhF64 ArcTan2F32 ArcTan2F64"
+            "ArcTanF32 ArcTanF64 ArcTanhF32 ArcTanhF64 Args BitAndI32 BitAndI64 BitAndU32"
+            "BitAndU64 BitAndU8 BitOrI32 BitOrI64 BitOrU32 BitOrU64 BitOrU8 BitReverseI32"
+            "BitReverseI64 BitReverseU32 BitReverseU64 BitReverseU8 BitXorI32 BitXorI64 BitXorU32 BitXorU64"
+            "BitXorU8 CeilingF32 CeilingF64 CharToU32 CharToU64 CharsToString Close ClosedFile"
+            "CommandOutputStatus CommandOutputStderr CommandOutputStdout CopyFile CosF32 CosF64 CoshF32 CoshF64"
+            "CreateDirectory CreateDirectoryAll DateDay DateMonth DateTimeFromParts DateTimeInZone DateTimeToEpochMillis DateTimeToString"
+            "DateWeekday DateYear DecodeUtf8 DivideF32 DivideF64 DivideI32 DivideI64 DivideU32"
+            "DivideU64 DivideU8 EmptyRegexMatch EncodeUtf8 EnterRawMode EpochMillisToDateTime EqualBool EqualChar"
+            "EqualDateTime EqualF32 EqualF64 EqualI32 EqualI64 EqualString EqualU32 EqualU64"
+            "EqualU8 ExitRawMode F32ToF64 F64ToF32 FloorF32 FloorF64 Flush GetCurrentDirectory"
+            "GetEnv GetModuleDirectory GreaterDateTime GreaterF32 GreaterF64 GreaterI32 GreaterI64 GreaterOrEqualDateTime"
+            "GreaterOrEqualF32 GreaterOrEqualF64 GreaterOrEqualI32 GreaterOrEqualI64 GreaterOrEqualU32 GreaterOrEqualU64 GreaterOrEqualU8 GreaterU32"
+            "GreaterU64 GreaterU8 I32ToF32 I32ToF64 I32ToI64 I32ToU32 I32ToU64 I32ToU8"
+            "I64ToF32 I64ToF64 I64ToI32 I64ToU32 I64ToU64 I64ToU8 IsAlphanumeric IsAsciiDigit"
+            "IsDirectory IsFile IsLetter IsLowercase IsPathExists IsUppercase IsWhitespace JoinPath"
+            "LessDateTime LessF32 LessF64 LessI32 LessI64 LessOrEqualDateTime LessOrEqualF32 LessOrEqualF64"
+            "LessOrEqualI32 LessOrEqualI64 LessOrEqualU32 LessOrEqualU64 LessOrEqualU8 LessU32 LessU64 LessU8"
+            "ListDirectory ModuloI32 ModuloI64 ModuloU32 ModuloU64 ModuloU8 MulF32 MulF64"
+            "MulI32 MulI64 MulU32 MulU64 MulU8 NegF32 NegF64 NegI32"
+            "NegI64 Not Now NowUtc OpenAppend OpenRead OpenWrite Or"
+            "ParseDateTime ParseF32 ParseF64 ParseI32 ParseI64 ParseU32 ParseU64 PowerF32"
+            "PowerF64 Print PrintError QuotientI32 QuotientI64 ReadChunk ReadFile ReadFileBytes"
+            "ReadKey ReadLine ReadLineFrom RegexCaptureNames RegexCompile RegexFind RegexFindAll RegexIsMatch"
+            "RegexMatchEnd RegexMatchGroup RegexMatchNamedGroup RegexMatchStart RegexMatchText RegexReplace RegexReplaceAll RegexSplit"
+            "RemainderI32 RemainderI64 RemoveDirectory RemoveFile RenamePath RoundF32 RoundF64 RunCommand"
+            "ShiftLeftI32 ShiftLeftI64 ShiftLeftU32 ShiftLeftU64 ShiftLeftU8 ShiftRightI32 ShiftRightI64 ShiftRightU32"
+            "ShiftRightU64 ShiftRightU8 SinF32 SinF64 SinhF32 SinhF64 SocketClose SocketIsClosed"
+            "SocketPeer SocketRead SocketReadAll SocketReadExact SocketReadLine SocketShutdownWrite SocketWrite SocketWriteAll"
+            "SocketWriteLine SqrtF32 SqrtF64 StringContains StringEndsWith StringIndexOf StringJoin StringLength"
+            "StringLines StringLowercase StringReplace StringReplaceAll StringSlice StringSplit StringStartsWith StringToChars"
+            "StringTrim StringTrimEnd StringTrimStart StringUppercase StringWords SubDay SubF32 SubF64"
+            "SubHour SubI32 SubI64 SubMillisecond SubMinute SubMonth SubSecond SubU32"
+            "SubU64 SubU8 SubWeek SubYear TanF32 TanF64 TanhF32 TanhF64"
+            "TcpAccept TcpCloseListener TcpConnect TcpListen TcpLocalPort TimeHour TimeMillisecond TimeMinute"
+            "TimeSecond TimeZoneName TimeZoneOffsetMinutes TruncateF32 TruncateF64 U32ToChar U32ToF32 U32ToF64"
+            "U32ToI32 U32ToI64 U32ToU64 U32ToU8 U64ToChar U64ToF32 U64ToF64 U64ToI32"
+            "U64ToI64 U64ToU32 U64ToU8 U8ToI32 U8ToI64 U8ToU32 U8ToU64 WriteBytes"
+            "WriteFile WriteFileBytes WriteString"
+            // END builtins
+        ), 0: "label"}
+
+        // 内置类型按类别着色; 用户 Data 由类型上下文落到 kslType.
+        {match: include("primitiveTypes"), 0: "type"}
+        {match: include("typeConstructors"), 0: "kslTypeConstructor"}
+        {match: include("namedTypes"), 0: "kslType"}
+
+        // 类型按上下文识别, 不按首字母大写猜测: 变量名可以是 A, 类型也可能小写.
+        {include: "annotation"}
+        {
+            match: /(\^)\s*\(\s*([\p{L}_][\p{L}\p{N}_]*)\s*,\s*([\p{L}_][\p{L}\p{N}_]*)\s*\)/
+            1: "operator"
+            2: "kslType"
+            2: {match: include("primitiveTypes"), 0: "type"}
+            2: {match: include("typeConstructors"), 0: "kslTypeConstructor"}
+            3: "kslType"
+            3: {match: include("primitiveTypes"), 0: "type"}
+            3: {match: include("typeConstructors"), 0: "kslTypeConstructor"}
+        }
+        {
+            match: /(\^)\s*([\p{L}_][\p{L}\p{N}_]*)/
+            1: "operator"
+            2: "kslType"
+            2: {match: include("primitiveTypes"), 0: "type"}
+            2: {match: include("typeConstructors"), 0: "kslTypeConstructor"}
+        }
+        {
+            match: /([\p{L}_][\p{L}\p{N}_]*)(?=\s*\/)/
+            1: "kslType"
+            1: {match: include("primitiveTypes"), 0: "type"}
+            1: {match: include("typeConstructors"), 0: "kslTypeConstructor"}
+        }
+
+        // 类型限定名与模式中的变体名.
+        {match: /(\/)\s*([\p{L}_][\p{L}\p{N}_]*)/, 1: "delimiter", 2: "kslConstructor"}
+
+        // 调用名: 标识符后紧跟 `[`, 排除已经匹配的特殊形式, 操作与内置函数.
+        {match: /([\p{L}_][\p{L}\p{N}_]*)(?=\s*\[)/, 1: "kslFunction"}
+
+        // 抛弃记号 `_`.
+        {match: /\b_+\b/, 0: "comment"}
+
+        // `@` 与 `^` 是前缀符号; `/` 是类型限定名的分隔符.
+        {match: /[@^+\-]/, 0: "operator"}
+        {match: /[\/,;:]/, 0: "delimiter"}
+
+        // 变量兜底.
+        {match: /[\p{L}_][\p{L}\p{N}_]*/, 0: "variable"}
+    ]
+}

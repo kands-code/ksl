@@ -1,0 +1,82 @@
+# Option 与 Result: 映射, 串联, 默认值与解析错误.
+
+@Let[some : Option[i64], Option/Some[7]];
+@Let[none : Option[i64], Option/None[]];
+@Let[mapped, @OptionMap[some, @Fn[[x : i64] : i64, MulI64[x, 2]]]];
+@Let[chained, @OptionAndThen[some, @Fn[[x : i64] : Option[i64], Option/Some[AddI64[x, 1]]]]];
+@Assert[EqualI64[@OptionGet[mapped, 0], 14], "Option 映射取回值"];
+@Assert[EqualI64[@OptionGet[chained, 0], 8], "Option 串联取回值"];
+@Assert[EqualI64[@OptionGet[none, 42], 42], "空 Option 取默认值"];
+@Assert[EqualBool[@IsNone[none], true], "None 判定"];
+
+@Let[ok : Result[i64, string], Result/Ok[5]];
+@Let[err : Result[i64, string], Result/Err["bad"]];
+@Let[mapped_ok, @ResultMap[ok, @Fn[[x : i64] : i64, AddI64[x, 1]]]];
+@Let[chained_ok, @ResultAndThen[ok,
+  @Fn[[x : i64] : Result[i64, string], Result/Ok[MulI64[x, 2]]]]];
+@Assert[EqualI64[@ResultGet[mapped_ok, 0], 6], "Result 映射取回值"];
+@Assert[EqualI64[@ResultGet[chained_ok, 0], 10], "Result 串联取回值"];
+@Assert[EqualBool[@IsErr[err], true], "Result 为 Err"];
+@Assert[EqualI64[@ResultGet[err, -1], -1], "Err 取默认值"];
+
+@Let[parsed, ParseI64["42"]];
+@Let[unparsable, ParseI64["oops"]];
+@Assert[EqualI64[@Match[parsed, { (/Ok[x], x), (/Err[_], -1) }], 42], "解析整数成功"];
+@Assert[
+  EqualString[@Match[unparsable, { (/Ok[_], "ok"), (/Err[_], "err") }], "err"],
+  "解析整数失败"
+];
+@Assert[
+  EqualU32[@Match[ParseU32["42"], {
+    (Result/Ok[value], value),
+    (Result/Err[_error], 0u32)
+  }], 42u32],
+  "ParseU32"
+];
+@Assert[
+  EqualI64[AddI64[@OptionGet[some, DivideI64[1, 0]], @ResultGet[ok, DivideI64[1, 0]]], 12],
+  "缺省值不参与求值"
+];
+
+@Let[from_ok, @ResultOrElse[ok, @Fn[[e : string] : Result[i64, bool], Result/Ok[0]]]];
+@Let[from_err, @ResultOrElse[err,
+  @Fn[[e : string] : Result[i64, bool], Result/Ok[U64ToI64[StringLength[e]]]]]];
+@Assert[EqualI64[@ResultGet[from_ok, -1], 5], "ResultOrElse 走 Ok 分支"];
+@Assert[EqualI64[@ResultGet[from_err, -1], 3], "ResultOrElse 走 Err 分支"];
+
+# 解析错误的具体种类.
+@Assert[
+  @Match[ParseI64[""], {
+    (/Err[e], @Match[e, { (/Empty[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "空整数串"
+];
+@Assert[
+  @Match[ParseF64["x"], {
+    (/Err[e], @Match[e, { (/Invalid[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "非法浮点格式"
+];
+@Assert[
+  @Match[ParseU64["99999999999999999999999999"], {
+    (/Err[e], @Match[e, { (/OutOfRange[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "无符号整数溢出"
+];
+@Assert[
+  @Match[DecodeUtf8[{97u8, 255u8}], {
+    (/Err[e], @Match[e, { (/Invalid[offset], EqualU64[offset, 1u64]), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "非法 UTF-8 偏移按字节计"
+];
+@Assert[
+  @Match[DecodeUtf8[{195u8}], {
+    (/Err[e], @Match[e, { (/Incomplete[offset], EqualU64[offset, 0u64]), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "不完整 UTF-8"
+];

@@ -1,0 +1,349 @@
+# 网络: TCP 基本操作, 关闭唤醒, 读取取消与超时.
+
+@Def[listen, [] : TcpListener,
+  @Match[TcpListen["127.0.0.1", 0u64], {
+    (/Ok[listener], listener),
+    (/Err[_], @Panic["TcpListen 失败"])
+  }]];
+
+@Def[accept, [listener : TcpListener] : Socket,
+  @Match[TcpAccept[listener, 5000u64], {
+    (/Ok[socket], socket),
+    (/Err[_], @Panic["TcpAccept 失败"])
+  }]];
+
+@Def[connect, [port : u64, timeout : u64] : Socket,
+  @Match[TcpConnect["127.0.0.1", port, timeout], {
+    (/Ok[socket], socket),
+    (/Err[_], @Panic["TcpConnect 失败"])
+  }]];
+
+@Def[readLine, [socket : Socket, timeout : u64] : string,
+  @Match[SocketReadLine[socket, 1024u64, timeout], {
+    (/Ok[line], @Match[line, {
+      (/Some[text], text),
+      (/None[], @Panic["读取到 EOF"])
+    }]),
+    (/Err[_], @Panic["读取失败"])
+  }]];
+
+@Def[writeLine, [socket : Socket, text : string] : nil,
+  @Match[SocketWriteLine[socket, text, 5000u64], {
+    (/Ok[_], nil),
+    (/Err[_], @Panic["写入失败"])
+  }]];
+
+@Def[isClosed, [error : SocketError] : bool,
+  @Match[error, { (/Closed[], true), (_, false) }]];
+
+@Def[isTimedOut, [error : SocketError] : bool,
+  @Match[error, { (/TimedOut[], true), (_, false) }]];
+
+@Def[isTooLarge, [error : SocketError] : bool,
+  @Match[error, { (/TooLarge[], true), (_, false) }]];
+
+@Def[isKilled, [reason : ExitReason] : bool,
+  @Match[reason, { (/Killed[], true), (_, false) }]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    # 基本回显.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[port, TcpLocalPort[listener]],
+      @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+        @Block[
+          @Let[socket, accept[listener]],
+          @Assert[
+            StringStartsWith[SocketPeer[socket], "127.0.0.1:"],
+            "套接字对端地址"
+          ],
+          @Let[text, readLine[socket, 5000u64]],
+          writeLine[socket, text],
+          SocketClose[socket],
+          nil
+        ]]],
+      @Let[client, @Handler[[self : Pid[nil, string], port : u64] : string,
+        @Block[
+          @Let[socket, connect[port, 5000u64]],
+          writeLine[socket, "hello"],
+          @Let[text, readLine[socket, 5000u64]],
+          SocketClose[socket],
+          text
+        ]]],
+      @Let[server_pid, @Spawn[server, listener]],
+      @Let[client_pid, @Spawn[client, port]],
+      @Assert[EqualString[@ResultGet[@Join[client_pid], ""], "hello"], "TCP 回显内容"],
+      @Let[_, @Join[server_pid]],
+      TcpCloseListener[listener]
+    ],
+
+    # 尾写: 套接字在写入后不再被引用, 写入仍应完成.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[port, TcpLocalPort[listener]],
+      @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+        @Block[
+          @Let[socket, accept[listener]],
+          writeLine[socket, "ok"],
+          nil
+        ]]],
+      @Let[server_pid, @Spawn[server, listener]],
+      @Let[client, @Handler[[self : Pid[nil, string], port : u64] : string,
+        @Block[
+          @Let[socket, connect[port, 5000u64]],
+          @Let[text, readLine[socket, 5000u64]],
+          SocketClose[socket],
+          text
+        ]]],
+      @Let[client_pid, @Spawn[client, port]],
+      @Assert[EqualString[@ResultGet[@Join[client_pid], ""], "ok"], "尾写应送达客户端"],
+      @Let[_, @Join[server_pid]],
+      TcpCloseListener[listener]
+    ],
+
+    # 关闭写侧后仍可读取回复.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[port, TcpLocalPort[listener]],
+      @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+        @Block[
+          @Let[socket, accept[listener]],
+          @Assert[EqualString[readLine[socket, 5000u64], "hello"], "服务端首读内容"],
+          @Assert[
+            @Match[SocketReadLine[socket, 1024u64, 5000u64], {
+              (/Ok[line], @Match[line, { (/Some[_], false), (/None[], true) }]),
+              (/Err[_], false)
+            }],
+            "对端关写侧后应读到 EOF"
+          ],
+          writeLine[socket, "bye"],
+          SocketClose[socket],
+          nil
+        ]]],
+      @Let[client, @Handler[[self : Pid[nil, string], port : u64] : string,
+        @Block[
+          @Let[socket, connect[port, 5000u64]],
+          @Assert[Not[SocketIsClosed[socket]], "连接建立后句柄应打开"],
+          writeLine[socket, "hello"],
+          @Assert[
+            @IsOk[SocketShutdownWrite[socket, 5000u64]],
+            "SocketShutdownWrite 应成功"
+          ],
+          @Let[text, readLine[socket, 5000u64]],
+          @Assert[EqualString[text, "bye"], "关写侧后仍可读取回复"],
+          SocketClose[socket],
+          @Assert[SocketIsClosed[socket], "关闭后句柄应关闭"],
+          text
+        ]]],
+      @Let[server_pid, @Spawn[server, listener]],
+      @Let[client_pid, @Spawn[client, port]],
+      @Assert[
+        EqualString[@ResultGet[@Join[client_pid], ""], "bye"],
+        "客户端应收到回复"
+      ],
+      @Let[_, @Join[server_pid]],
+      TcpCloseListener[listener]
+    ],
+
+    # 零超时连接立即失败.
+    @Assert[
+      @Match[TcpConnect["127.0.0.1", 1u64, 0u64], {
+        (/Ok[_], false),
+        (/Err[error], @Match[error, { (/InvalidArgument[_], true), (_, false) }])
+      }],
+      "TcpConnect 的零超时应报 InvalidArgument"
+    ],
+
+    # 关闭监听器: 唤醒接受; 空监听器的接受超时.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[acceptor, @Handler[[self : Pid[nil, bool], listener : TcpListener] : bool,
+        @Match[TcpAccept[listener, 5000u64], {
+          (/Ok[_], false),
+          (/Err[error], isClosed[error])
+        }]]],
+      @Let[acceptor_pid, @Spawn[acceptor, listener]],
+      @Sleep[100u64],
+      TcpCloseListener[listener],
+      @Assert[
+        @ResultGet[@Join[acceptor_pid], false],
+        "关闭监听器应唤醒等待中的接受"
+      ],
+      @Let[timeout_listener, listen[]],
+      @Assert[
+        @Match[TcpAccept[timeout_listener, 50u64], {
+          (/Ok[_], false),
+          (/Err[error], isTimedOut[error])
+        }],
+        "空监听器接受应超时"
+      ],
+      TcpCloseListener[timeout_listener]
+    ],
+
+    # 关闭套接字: 唤醒等待中的读取.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[port, TcpLocalPort[listener]],
+      @Let[server, @Handler[[self : Pid[nil, bool], listener : TcpListener] : bool,
+        @Block[
+          @Let[socket, accept[listener]],
+          @Let[reader, @Handler[[self : Pid[nil, bool], socket : Socket] : bool,
+            @Match[SocketReadLine[socket, 1024u64, 5000u64], {
+              (/Ok[_], false),
+              (/Err[error], isClosed[error])
+            }]]],
+          @Let[reader_pid, @Spawn[reader, socket]],
+          @Sleep[100u64],
+          SocketClose[socket],
+          @ResultGet[@Join[reader_pid], false]
+        ]]],
+      @Let[server_pid, @Spawn[server, listener]],
+      @Let[client, @Handler[[self : Pid[nil, nil], port : u64] : nil,
+        @Block[
+          @Let[socket, connect[port, 5000u64]],
+          @Sleep[200u64],
+          SocketClose[socket],
+          nil
+        ]]],
+      @Let[client_pid, @Spawn[client, port]],
+      @Assert[@ResultGet[@Join[server_pid], false], "关闭套接字应唤醒等待中的读"],
+      @Let[_, @Join[client_pid]],
+      TcpCloseListener[listener]
+    ],
+
+    # 取消挂起的读取后, 共享同一套接字的其他读取仍应继续.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[port, TcpLocalPort[listener]],
+      @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+        @Block[
+          @Let[socket, accept[listener]],
+          @Sleep[200u64],
+          @Assert[
+            @IsOk[SocketWriteLine[socket, "first", 5000u64]],
+            "服务端写入应成功"
+          ],
+          @Sleep[100u64],
+          SocketClose[socket],
+          nil
+        ]]],
+      @Let[server_pid, @Spawn[server, listener]],
+      @Let[socket, connect[port, 5000u64]],
+      @Let[reader, @Handler[
+        [self : Pid[nil, Option[string]], socket : Socket] : Option[string],
+        @Match[SocketReadLine[socket, 1024u64, 5000u64], {
+          (/Ok[line], line),
+          (/Err[_], @Panic["读取者失败"])
+        }]]],
+      @Let[reader_pid, @Spawn[reader, socket]],
+      @Sleep[100u64],
+      @Assert[@Kill[reader_pid], "读取者应处于等待"],
+      @Assert[
+        @Match[@Join[reader_pid], {
+          (/Ok[_], false),
+          (/Err[reason], isKilled[reason])
+        }],
+        "读取者退出原因应为 Killed"
+      ],
+      @Assert[
+        EqualString[readLine[socket, 5000u64], "first"],
+        "取消读取后套接字仍可读"
+      ],
+      SocketClose[socket],
+      @Let[_, @Join[server_pid]],
+      TcpCloseListener[listener]
+    ],
+
+    # 读全量超过上限.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[port, TcpLocalPort[listener]],
+      @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+        @Block[
+          @Let[socket, accept[listener]],
+          @Assert[
+            @IsOk[SocketWriteAll[socket, EncodeUtf8["hello"], 5000u64]],
+            "SocketWriteAll 应成功"
+          ],
+          SocketClose[socket],
+          nil
+        ]]],
+      @Let[client, @Handler[[self : Pid[nil, bool], port : u64] : bool,
+        @Block[
+          @Let[socket, connect[port, 5000u64]],
+          @Let[result, @Match[SocketReadAll[socket, 2u64, 5000u64], {
+            (/Ok[_], false),
+            (/Err[error], isTooLarge[error])
+          }]],
+          SocketClose[socket],
+          result
+        ]]],
+      @Let[server_pid, @Spawn[server, listener]],
+      @Let[client_pid, @Spawn[client, port]],
+      @Let[_, @Join[server_pid]],
+      @Assert[
+        @ResultGet[@Join[client_pid], false],
+        "读全量超过上限应报 TooLarge"
+      ],
+      TcpCloseListener[listener]
+    ],
+
+    # 未写入数据时读取超时.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[port, TcpLocalPort[listener]],
+      @Let[client, @Handler[[self : Pid[nil, nil], port : u64] : nil,
+        @Block[
+          @Let[socket, connect[port, 1000u64]],
+          @Assert[
+            @Match[SocketReadLine[socket, 1024u64, 50u64], {
+              (/Ok[_], false),
+              (/Err[error], isTimedOut[error])
+            }],
+            "未写入数据时读取应超时"
+          ],
+          SocketClose[socket],
+          nil
+        ]]],
+      @Let[client_pid, @Spawn[client, port]],
+      @Let[_, @Join[client_pid]],
+      TcpCloseListener[listener]
+    ],
+
+    # 默认总时限包含排队时间; 单次读不等待前序读操作完成.
+    @Block[
+      @Let[listener, listen[]],
+      @Let[port, TcpLocalPort[listener]],
+      @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+        @Block[
+          @Let[socket, accept[listener]],
+          @Sleep[300u64],
+          writeLine[socket, "x"],
+          SocketClose[socket],
+          nil
+        ]]],
+      @Let[server_pid, @Spawn[server, listener]],
+      @Let[socket, connect[port, 5000u64]],
+      @Let[limited, @Handler[
+        [self : Pid[nil, Result[Option[List[u8]], SocketError]], socket : Socket]
+          : Result[Option[List[u8]], SocketError],
+        @Block[
+          @Sleep[50u64],
+          SocketRead[socket, 1u64, 100u64]
+        ]]],
+      @Let[limited_pid, @Spawn[limited, socket]],
+      @Let[result, @ResultGet[@Join[limited_pid], @Panic["总时限读取者 Join 失败"]]],
+      @Assert[
+        @Match[result, {
+          (/Ok[_], false),
+          (/Err[error], isTimedOut[error])
+        }],
+        "总时限应包含排队时间"
+      ],
+      @Assert[EqualString[readLine[socket, 5000u64], "x"], "前序读取应正常完成"],
+      SocketClose[socket],
+      @Let[_, @Join[server_pid]],
+      TcpCloseListener[listener]
+    ]
+  ]]

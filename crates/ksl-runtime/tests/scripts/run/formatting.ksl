@@ -1,0 +1,50 @@
+# 格式化: 整数, 浮点与值显示.
+
+# 整数格式: 宽度, 零填充, 进制与对齐.
+@Let[x, 42];
+@Assert[EqualString[f"x={x:05}", "x=00042"], "整数零填充宽度"];
+@Assert[EqualString[f"{255:#06x}", "0x00ff"], "十六进制带前缀零填充"];
+@Assert[EqualString[f"{255:#010x}", "0x000000ff"], "十六进制宽度计入前缀"];
+@Assert[EqualString[f"{-255:#x}", "-0xff"], "进制格式保留负号"];
+@Assert[EqualString[f"{42:<08}", "00000042"], "0 标志优先于左对齐"];
+
+# 浮点格式: 精度, 对齐与负零.
+@Assert[
+  EqualString[f"{1.25:<08.2}", "00001.25"],
+  "0 标志优先于左对齐且作用于浮点"
+];
+@Assert[EqualString[f"{1.0:.2}", "1.00"], "浮点精度为小数位数"];
+@Assert[EqualString[f"{-0.0:>}", "-0.0"], "负零保留负号"];
+
+# 数值默认不带后缀; `?` 输出源码形式, 后缀计入宽度.
+@Let[u, 255u8];
+@Assert[EqualString[f"{u}", "255"], "u8 默认不带后缀"];
+@Assert[EqualString[f"{u:?}", "255u8"], "u8 源码形式带后缀"];
+@Assert[EqualString[f"{u:>6?}", " 255u8"], "u8 后缀计入宽度"];
+@Assert[EqualString[f"{u:#06x}", "0x00ff"], "u8 进制"];
+@Assert[
+  EqualString[f"{u:#08x?}", "0x00ffu8"],
+  "u8 后缀计入宽度且零填充在前缀之后"
+];
+@Let[w, 255u32];
+@Assert[EqualString[f"{w:?}", "255u32"], "u32 源码形式带后缀"];
+@Let[big, 255u64];
+@Assert[EqualString[f"{big:>8?}", "  255u64"], "u64 后缀计入宽度"];
+@Let[i, 42i32];
+@Assert[EqualString[f"{i:?}", "42i32"], "i32 源码形式带后缀"];
+@Let[f, 1.5f32];
+@Assert[EqualString[f"{f}", "1.5"], "f32 默认不带后缀"];
+@Assert[EqualString[f"{f:?}", "1.5f32"], "f32 源码形式带后缀"];
+@Assert[EqualString[f"{f:.2}", "1.50"], "f32 精度不带后缀"];
+@Assert[EqualString[f"{f:.2?}", "1.50f32"], "f32 精度与后缀"];
+@Let[d, 1.5];
+@Assert[EqualString[f"{d:?}", "1.5f64"], "f64 源码形式带后缀"];
+@Let[xs, {1i32, 2i32}];
+@Assert[EqualString[f"{xs}", "{1i32, 2i32}"], "List 元素始终带后缀"];
+
+@Let[s, "hi"];
+@Let[ch, 'a'];
+@Assert[EqualString[f"{s}", "hi"], "字符串默认省略引号"];
+@Assert[EqualString[f"{s:?}", "\"hi\""], "字符串显式引号"];
+@Assert[EqualString[f"{s:>4}", "  hi"], "字符串宽度"];
+@Assert[EqualString[f"{ch:>3}", "  a"], "字符宽度"];

@@ -1,0 +1,33 @@
+# 定时消息: 投递, 取消与目标终止后的返回值.
+
+@Def[waiting, [] : Handler[Pid[i64, i64]],
+  @Handler[[self : Pid[i64, i64]] : i64,
+    @Match[@Receive[0u8, Option/None[]], {
+      (/Some[n], n),
+      (/None[], 0)
+    }]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[p, @Spawn[waiting[]]],
+    @Let[_, @SetTimer[p, 0u8, 7, 10u64]],
+    @Assert[EqualI64[@ResultGet[@Join[p], 0], 7], "定时消息延迟投递"],
+
+    @Let[finished, @Handler[[self : Pid[i64, i64]] : i64, 1]],
+    @Let[q, @Spawn[finished]],
+    @Let[_, @Join[q]],
+    @Assert[
+      @Match[@SetTimer[q, 0u8, 2, 10u64], { (/Some[_], false), (/None[], true) }],
+      "目标已终止时返回 None"
+    ],
+
+    @Let[r, @Spawn[waiting[]]],
+    @Let[timer, @SetTimer[r, 0u8, 7, 20u64]],
+    @Let[cancelled, @Match[timer, { (/Some[id], @CancelTimer[id]), (/None[], false) }]],
+    @Let[again, @Match[timer, { (/Some[id], @CancelTimer[id]), (/None[], false) }]],
+    @Assert[cancelled, "取消定时消息"],
+    @Assert[Not[again], "重复取消失败"],
+    @Let[_, @Sleep[30u64]],
+    @Let[_, @Send[r, 0u8, 5]],
+    @Assert[EqualI64[@ResultGet[@Join[r], 0], 5], "取消后不投递"]
+  ]]

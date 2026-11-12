@@ -1,0 +1,263 @@
+//! ksl 命令行入口.
+//!
+//! 子命令见 `docs/topics/implementation/cli.md` 第 1 节:
+//! lex, ast, check, cps, linear, run, repl, lsp 与 help.
+//! `ksl` 无参数时显示帮助, `ksl repl [选项] [文件]` 进入交互模式.
+
+#[macro_use]
+mod output;
+
+mod cli;
+#[cfg(feature = "lsp")]
+mod lsp;
+mod project;
+mod repl;
+
+use std::path::Path;
+use std::process::ExitCode;
+
+use ksl_base::source::Sources;
+use ksl_compile::{CheckedGraph, CompileCache, RootSource, compile, root_dir_of};
+use ksl_diagnostics::diagnostic::{render_actor_error, render_error, render_runtime_error};
+use ksl_diagnostics::error::{KslError, RuntimeError};
+use ksl_frontend::{lexer, parser};
+use ksl_host::Host;
+
+use crate::project::project_root;
+
+fn main() -> ExitCode {
+    let action = match cli::parse(std::env::args_os().skip(1)) {
+        Ok(action) => action,
+        Err(err) => {
+            err!("{}", err.render());
+            return ExitCode::from(2);
+        },
+    };
+    // 运行时占住主线程; 网络引擎与工作线程池在后台线程执行 I/O 与线程池调用.
+    dispatch(action)
+}
+
+/// 按子命令分派.
+fn dispatch(action: cli::Action) -> ExitCode {
+    match action {
+        cli::Action::Lex(file) => cmd_lex(&file),
+        cli::Action::Ast(file) => cmd_ast(&file),
+        cli::Action::Check(file) => cmd_check(&file),
+        cli::Action::Cps(file) => cmd_cps(&file),
+        cli::Action::Linear(file) => cmd_linear(&file),
+        #[cfg(feature = "lsp")]
+        cli::Action::Lsp => match lsp::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                errln!("LSP 错误: {err}");
+                ExitCode::FAILURE
+            },
+        },
+        #[cfg(not(feature = "lsp"))]
+        cli::Action::Lsp => {
+            errln!("当前构建未启用 LSP 功能");
+            ExitCode::from(2)
+        },
+        cli::Action::Run {
+            source,
+            args,
+            io_workers,
+            cpu_workers,
+        } => cmd_run(&source, args, io_workers, cpu_workers),
+        cli::Action::Repl {
+            file,
+            code,
+            io_workers,
+            cpu_workers,
+        } => repl::run(file.as_deref(), code.as_deref(), io_workers, cpu_workers),
+        cli::Action::Help(topic) => {
+            out!("{}", cli::help(topic));
+            ExitCode::SUCCESS
+        },
+        cli::Action::Version => {
+            outln!("ksl {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        },
+    }
+}
+
+/// 读取源文件; 成功返回源码文本.
+fn read_source(file: &Path) -> Option<String> {
+    match std::fs::read_to_string(file) {
+        Ok(text) => Some(text),
+        Err(err) => {
+            errln!("读取文件 {} 失败: {err}", file.display());
+            None
+        },
+    }
+}
+
+/// 渲染源码诊断并返回失败退出码.
+fn report_error(sources: &Sources, err: &KslError) -> ExitCode {
+    errln!("{}", render_error(sources, err));
+    ExitCode::FAILURE
+}
+
+/// 分析命令的根: 启动目录有项目标记且文件位于其下时用启动目录.
+fn analysis_root(file: &Path) -> std::path::PathBuf {
+    std::env::current_dir()
+        .map_or_else(|_| root_dir_of(file), |startup| project_root(&startup, file))
+}
+
+/// 加载并检查主文件; 失败时已渲染诊断.
+fn load_graph(file: &Path, sources: &mut Sources) -> Option<CheckedGraph> {
+    let mut cache = CompileCache::new();
+    let root = analysis_root(file);
+    let source = RootSource::FileAt { root: &root, file };
+    match compile(source, sources, &mut cache) {
+        Ok(graph) => Some(graph),
+        Err(err) => {
+            errln!("{}", render_error(sources, &err));
+            None
+        },
+    }
+}
+
+/// 取主模块并降级为 CPS IR; 主模块缺失时报告内部错误.
+fn lower_root(graph: &CheckedGraph) -> Option<ksl_ir::cps::Module> {
+    let Some(root) = graph.get(&graph.root) else {
+        errln!("内部错误: 模块图缺少主模块");
+        return None;
+    };
+    Some(ksl_ir::lower::to_cps(&root.program))
+}
+
+/// 输出词法记号序列; 词法错误渲染为诊断.
+fn cmd_lex(file: &Path) -> ExitCode {
+    let Some(text) = read_source(file) else {
+        return ExitCode::FAILURE;
+    };
+    let mut sources = Sources::default();
+    let id = sources.add(file.display().to_string(), &text);
+    match lexer::lex(sources.text(id), id) {
+        Ok(tokens) => {
+            for token in tokens {
+                outln!("{token:?}");
+            }
+            ExitCode::SUCCESS
+        },
+        Err(err) => report_error(&sources, &err),
+    }
+}
+
+/// 输出语法树; 语法错误渲染为诊断.
+fn cmd_ast(file: &Path) -> ExitCode {
+    let Some(text) = read_source(file) else {
+        return ExitCode::FAILURE;
+    };
+    let mut sources = Sources::default();
+    let id = sources.add(file.display().to_string(), &text);
+    match parser::parse_text(sources.text(id), id) {
+        Ok(program) => {
+            outln!("{program:#?}");
+            ExitCode::SUCCESS
+        },
+        Err(err) => report_error(&sources, &err),
+    }
+}
+
+/// 只做类型检查, 不执行.
+fn cmd_check(file: &Path) -> ExitCode {
+    let mut sources = Sources::default();
+    if load_graph(file, &mut sources).is_some() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// 把 typed 程序降级为 CPS IR 并输出, 供调试.
+fn cmd_cps(file: &Path) -> ExitCode {
+    let mut sources = Sources::default();
+    let Some(graph) = load_graph(file, &mut sources) else {
+        return ExitCode::FAILURE;
+    };
+    let Some(ir) = lower_root(&graph) else {
+        return ExitCode::FAILURE;
+    };
+    out!("{ir}");
+    ExitCode::SUCCESS
+}
+
+/// 把 typed 程序降级为线性 CPS IR 并输出, 供调试.
+fn cmd_linear(file: &Path) -> ExitCode {
+    let mut sources = Sources::default();
+    let Some(graph) = load_graph(file, &mut sources) else {
+        return ExitCode::FAILURE;
+    };
+    let Some(ir) = lower_root(&graph) else {
+        return ExitCode::FAILURE;
+    };
+    let linear = ksl_ir::linear::linearize(&ir);
+    out!("{linear}");
+    ExitCode::SUCCESS
+}
+
+/// 执行脚本: 词法, 语法, 类型检查, 降级为线性 IR 后执行.
+///
+/// 运行时错误渲染诊断到标准错误, 退出码 1.
+/// `@Exit[code]` 以指定码退出.
+fn cmd_run(
+    source: &cli::Source,
+    args: Vec<String>,
+    io_workers: Option<usize>,
+    cpu_workers: Option<usize>,
+) -> ExitCode {
+    match source {
+        cli::Source::File(file) => run_file(file, args, io_workers, cpu_workers),
+        cli::Source::Code(code) => run_code(code, args, io_workers, cpu_workers),
+    }
+}
+
+/// 执行文件形式的脚本.
+fn run_file(
+    file: &Path,
+    args: Vec<String>,
+    io_workers: Option<usize>,
+    cpu_workers: Option<usize>,
+) -> ExitCode {
+    let mut host = Host::in_current_dir_with_workers(io_workers, cpu_workers);
+    host.set_args(args);
+    match host.run_file(file) {
+        Ok(outcome) => finish_host(&mut host, outcome),
+        Err(err) => report_error(host.sources(), &err),
+    }
+}
+
+/// 执行命令行代码段.
+///
+/// 代码段不是模块, 不能使用 Actor 原语.
+fn run_code(
+    code: &str,
+    args: Vec<String>,
+    io_workers: Option<usize>,
+    cpu_workers: Option<usize>,
+) -> ExitCode {
+    let mut host = Host::in_current_dir_with_workers(io_workers, cpu_workers);
+    host.set_args(args);
+    match host.run_code("<命令行>", code) {
+        Ok(outcome) => finish_host(&mut host, outcome),
+        Err(err) => report_error(host.sources(), &err),
+    }
+}
+
+/// 统一处理运行时错误, Actor 错误与宿主关闭.
+fn finish_host(host: &mut Host, outcome: ksl_host::RunOutcome) -> ExitCode {
+    host.shutdown();
+    for err in &outcome.actor_errors {
+        errln!("{}", render_actor_error(host.sources(), err));
+    }
+    match outcome.result {
+        Ok(_) | Err(RuntimeError::BrokenPipe) => ExitCode::SUCCESS,
+        Err(RuntimeError::Exit(code)) => ExitCode::from(code),
+        Err(err) => {
+            errln!("{}", render_runtime_error(host.sources(), &err));
+            ExitCode::FAILURE
+        },
+    }
+}

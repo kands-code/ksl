@@ -1,0 +1,92 @@
+# 时间与日期: 字段, 时区, 算术与解析错误.
+
+@Let[base, @ResultGet[ParseDateTime["2026-03-08T01:30:00[America/New_York]"], Now[]]];
+@Assert[
+  EqualString[
+    DateTimeToString[AddHour[base, 1u64]],
+    "2026-03-08T03:30:00-04:00[America/New_York]"
+  ],
+  "时长算术跨夏令时"
+];
+@Assert[
+  EqualString[
+    DateTimeToString[AddDay[base, 1u64]],
+    "2026-03-09T01:30:00-04:00[America/New_York]"
+  ],
+  "日历算术保持本地时间"
+];
+@Assert[EqualDateTime[AddWeek[base, 1u64], AddDay[base, 7u64]], "周与日等价"];
+
+# 字段与命名时区.
+@Let[parts, @ResultGet[DateTimeFromParts[2026, 11, 12, 14, 30, 5], Now[]]];
+@Assert[EqualI64[DateYear[parts], 2026], "年"];
+@Assert[EqualI64[DateMonth[parts], 11], "月"];
+@Assert[EqualI64[DateDay[parts], 12], "日"];
+@Assert[EqualI64[TimeHour[parts], 14], "时"];
+@Assert[EqualI64[TimeMinute[parts], 30], "分"];
+@Assert[EqualI64[TimeSecond[parts], 5], "秒"];
+@Assert[EqualI64[DateWeekday[parts], 4], "ISO 星期"];
+
+@Let[d, @ResultGet[ParseDateTime["2026-07-15T12:00:00[America/New_York]"], Now[]]];
+@Let[utc, @ResultGet[DateTimeInZone[d, "UTC"], d]];
+@Assert[EqualString[TimeZoneName[d], "America/New_York"], "命名时区"];
+@Assert[EqualString[TimeZoneName[utc], "UTC"], "换时区"];
+@Assert[EqualI64[TimeZoneOffsetMinutes[d], -240], "纽约夏令时偏移"];
+@Assert[EqualI64[TimeHour[d], 12], "字段按自带时区解释"];
+@Assert[EqualI64[TimeZoneOffsetMinutes[utc], 0], "UTC 偏移"];
+@Assert[EqualI64[TimeHour[utc], 16], "换时区不改时刻"];
+
+# 比较与 epoch.
+@Let[same, @ResultGet[ParseDateTime["2026-07-15T16:00:00[UTC]"], d]];
+@Assert[EqualDateTime[d, same], "同一时刻不同显示时区相等"];
+@Assert[LessDateTime[d, AddHour[d, 1u64]], "按绝对时刻比较"];
+@Assert[LessOrEqualDateTime[d, same], "小于等于比较"];
+@Assert[GreaterDateTime[AddHour[d, 1u64], d], "大于比较"];
+@Assert[GreaterOrEqualDateTime[d, same], "大于等于比较"];
+
+@Let[round, EpochMillisToDateTime[DateTimeToEpochMillis[d]]];
+@Let[epoch, EpochMillisToDateTime[0]];
+@Let[parsed_epoch, @ResultGet[ParseDateTime["1970-01-01T00:00:00[UTC]"], epoch]];
+@Assert[EqualDateTime[round, d], "epoch 往返"];
+@Assert[LessI64[DateTimeToEpochMillis[EpochMillisToDateTime[-1]], 0], "1970 年之前为负"];
+@Assert[EqualDateTime[epoch, parsed_epoch], "零点与 UTC 纪元一致"];
+
+# 解析错误变体.
+@Let[bad_format, @Match[ParseDateTime["不是时间"], {
+  (/Ok[_], 0),
+  (/Err[e], @Match[e, { (/InvalidFormat[_], 1), (_, 0) }])
+}]];
+@Let[bad_zone, @Match[DateTimeInZone[d, "Not/AZone"], {
+  (/Ok[_], 0),
+  (/Err[e], @Match[e, { (/UnknownZone[_], 1), (_, 0) }])
+}]];
+@Let[bad_field, @Match[DateTimeFromParts[2026, 13, 1, 0, 0, 0], {
+  (/Ok[_], 0),
+  (/Err[e], @Match[e, { (/InvalidField[_], 1), (_, 0) }])
+}]];
+@Assert[EqualI64[bad_format, 1], "解析失败返回 InvalidFormat"];
+@Assert[EqualI64[bad_zone, 1], "未知时区返回 UnknownZone"];
+@Assert[EqualI64[bad_field, 1], "字段越界返回 InvalidField"];
+
+# 年月运算在目标月份没有对应日期时取该月最后一天.
+@Let[jan31, @ResultGet[ParseDateTime["2026-01-31T12:00:00[UTC]"], NowUtc[]]];
+@Assert[
+  EqualString[DateTimeToString[AddMonth[jan31, 1u64]], "2026-02-28T12:00:00+00:00[UTC]"],
+  "月末加一个月取目标月最后一天"
+];
+@Let[mar31, @ResultGet[ParseDateTime["2026-03-31T12:00:00[UTC]"], NowUtc[]]];
+@Assert[
+  EqualString[DateTimeToString[SubMonth[mar31, 1u64]], "2026-02-28T12:00:00+00:00[UTC]"],
+  "月末减一个月取目标月最后一天"
+];
+@Let[leap, @ResultGet[ParseDateTime["2024-02-29T12:00:00[UTC]"], NowUtc[]]];
+@Assert[
+  EqualString[DateTimeToString[AddYear[leap, 1u64]], "2025-02-28T12:00:00+00:00[UTC]"],
+  "闰日加一年取平年最后一天"
+];
+
+@Assert[EqualI64[TimeMillisecond[EpochMillisToDateTime[1234]], 234], "毫秒字段"];
+@Assert[
+  EqualI64[TimeZoneOffsetMinutes[NowUtc[]], 0],
+  "NowUtc 为零偏移"
+];

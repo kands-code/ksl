@@ -1,0 +1,20 @@
+[package]
+name = "ksl-value"
+description = "ksl 值表示与宿主资源接口"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arcstr.workspace = true
+imbl.workspace = true
+ksl-base.workspace = true
+ksl-catalog.workspace = true
+ksl-diagnostics.workspace = true
+ksl-macros.workspace = true
+ksl-plan.workspace = true
+parking_lot.workspace = true
+
+[lints]
+workspace = true
