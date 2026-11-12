@@ -1,0 +1,54 @@
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[_], @Panic["TcpListen 失败"])
+    }]],
+    @Let[port, TcpLocalPort[listener]],
+    @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+      @Block[
+        @Match[TcpAccept[listener, 5000U], {
+          (/Ok[socket], @Block[
+            @Let[text, @Match[SocketReadLine[socket, 1024U, 5000U], {
+              (/Ok[line], @Match[line, {
+                (/Some[value], value),
+                (/None[], @Panic["服务端意外 EOF"])
+              }]),
+              (/Err[_], @Panic["服务端读取失败"])
+            }]],
+            @Let[_, SocketWriteLine[socket, text, 5000U]],
+            SocketClose[socket],
+            nil
+          ]),
+          (/Err[_], @Panic["TcpAccept 失败"])
+        }]
+      ]]],
+    @Let[client, @Handler[[self : Pid[nil, string], port : u64] : string,
+      @Block[
+        @Match[TcpConnect["127.0.0.1", port, 5000U], {
+          (/Ok[socket], @Block[
+            @Let[_, SocketWriteLine[socket, "hello", 5000U]],
+            @Let[text, @Match[SocketReadLine[socket, 1024U, 5000U], {
+              (/Ok[line], @Match[line, {
+                (/Some[value], value),
+                (/None[], @Panic["客户端意外 EOF"])
+              }]),
+              (/Err[_], @Panic["客户端读取失败"])
+            }]],
+            SocketClose[socket],
+            text
+          ]),
+          (/Err[_], @Panic["TcpConnect 失败"])
+        }]
+      ]]],
+    @Let[server_pid, @Spawn[server, listener]],
+    @Let[client_pid, @Spawn[client, port]],
+    @Let[result, @Match[@Join[client_pid], {
+      (/Ok[text], text),
+      (/Err[_], @Panic["客户端 Join 失败"])
+    }]],
+    @Assert[EqualString[result, "hello"], "TCP 回显内容"],
+    @Let[_, @Join[server_pid]],
+    TcpCloseListener[listener]
+  ]]

@@ -1,0 +1,72 @@
+@Def[compile, [pattern : string] : Regex,
+  @Match[RegexCompile[pattern], {
+    (/Ok[re], re),
+    (/Err[e], @Panic["正则无效"])
+  }]];
+
+@Def[errKind, [e : RegexError] : string,
+  @Match[e, {
+    (/InvalidRepeat[_], "InvalidRepeat"),
+    (/UnclosedGroup[_], "UnclosedGroup"),
+    (/UnclosedClass[_], "UnclosedClass"),
+    (/DuplicateName[_], "DuplicateName"),
+    (/UnsupportedFeature[_], "UnsupportedFeature"),
+    (_, "其他")
+  }]];
+
+@Let[re, compile["(\\d+)-(\\d+)"]];
+@Assert[EqualBool[RegexIsMatch[re, "12-34"], true], "匹配命中"];
+@Assert[EqualBool[RegexIsMatch[re, "ab"], false], "匹配不中"];
+
+@Let[found, RegexFind[re, "ab 12-34 cd"]];
+@Assert[EqualBool[@IsSome[found], true], "找到匹配"];
+@Assert[EqualBool[@IsNone[RegexFind[re, "abc"]], true], "没有匹配"];
+@Let[hit, @OptionGet[found, EmptyRegexMatch[]]];
+@Assert[EqualString[RegexMatchText[hit], "12-34"], "匹配文本"];
+@Assert[EqualU64[RegexMatchStart[hit], 3U], "起始偏移"];
+@Assert[EqualU64[RegexMatchEnd[hit], 8U], "结束偏移"];
+@Assert[EqualString[@OptionGet[RegexMatchGroup[hit, 1U], ""], "12"], "第一组"];
+@Assert[EqualString[@OptionGet[RegexMatchGroup[hit, 2U], ""], "34"], "第二组"];
+@Assert[EqualString[@OptionGet[RegexMatchGroup[hit, 0U], ""], "12-34"], "零号组"];
+@Assert[EqualBool[@IsNone[RegexMatchGroup[hit, 9U]], true], "组下标越界"];
+
+@Let[all, RegexFindAll[re, "1-2 3-4"]];
+@Assert[EqualU64[@ListLength[all], 2U], "全部匹配"];
+@Let[first, @ListGet[all, 0U]];
+@Assert[EqualString[RegexMatchText[first], "1-2"], "首个匹配文本"];
+@Assert[EqualU64[RegexMatchStart[first], 0U], "首个匹配偏移"];
+
+@Assert[EqualString[RegexReplace[re, "1-2 3-4", "<$1>"], "<1> 3-4"], "改写首处"];
+@Assert[EqualString[RegexReplaceAll[re, "1-2 3-4", "<$1>"], "<1> <3>"], "改写全部"];
+@Assert[EqualString[RegexReplaceAll[re, "1-2", "$$"], "$"], "字面量美元"];
+@Assert[EqualU64[@ListLength[RegexSplit[re, "1-2 3-4"]], 3U], "按匹配切分"];
+
+@Let[named, compile["(?P<year>\\d{4})-(?P<month>\\d{2})"]];
+@Assert[EqualU64[@ListLength[RegexCaptureNames[named]], 2U], "命名组数量"];
+@Let[dated, @OptionGet[RegexFind[named, "on 2026-11"], EmptyRegexMatch[]]];
+@Assert[
+  EqualString[@OptionGet[RegexMatchNamedGroup[dated, "year"], ""], "2026"],
+  "按名取组"
+];
+@Assert[EqualBool[@IsNone[RegexMatchNamedGroup[dated, "day"]], true], "组名不存在"];
+
+@Let[caseless, compile["(?i)abc"]];
+@Assert[EqualBool[RegexIsMatch[caseless, "ABC"], true], "内联标志忽略大小写"];
+
+@Let[wide, compile["llo"]];
+@Let[wideHit, @OptionGet[RegexFind[wide, "héllo"], EmptyRegexMatch[]]];
+@Assert[EqualU64[RegexMatchStart[wideHit], 2U], "偏移按字符计"];
+
+@Let[badRepeat, @Match[RegexCompile["a{2,1}"], { (/Ok[_], @Panic["x"]), (/Err[e], e) }]];
+@Assert[EqualString[errKind[badRepeat], "InvalidRepeat"], "量词无效"];
+@Let[badGroup, @Match[RegexCompile["(x"], { (/Ok[_], @Panic["x"]), (/Err[e], e) }]];
+@Assert[EqualString[errKind[badGroup], "UnclosedGroup"], "括号未闭合"];
+@Let[badClass, @Match[RegexCompile["[a"], { (/Ok[_], @Panic["x"]), (/Err[e], e) }]];
+@Assert[EqualString[errKind[badClass], "UnclosedClass"], "字符类未闭合"];
+@Let[badName, @Match[RegexCompile["(?P<a>x)(?P<a>y)"], {
+  (/Ok[_], @Panic["x"]),
+  (/Err[e], e)
+}]];
+@Assert[EqualString[errKind[badName], "DuplicateName"], "组名重复"];
+@Let[badLook, @Match[RegexCompile["(?<=x)y"], { (/Ok[_], @Panic["x"]), (/Err[e], e) }]];
+@Assert[EqualString[errKind[badLook], "UnsupportedFeature"], "不支持环视"];

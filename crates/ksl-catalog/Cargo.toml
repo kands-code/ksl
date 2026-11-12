@@ -1,0 +1,13 @@
+[package]
+name = "ksl-catalog"
+description = "ksl 语言表面元数据"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ksl-base = { version = "0.1.0", path = "../ksl-base" }
+
+[lints]
+workspace = true

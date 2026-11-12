@@ -1,0 +1,48 @@
+# Actor 消息与调度的开销.
+#
+# 服务 Actor 逐条处理 20000 条加法消息, 客户端发送完毕后用 `Query` 收回结果.
+# 覆盖信箱排队, Handler 自循环与调度器轮转.
+
+# @result 20000
+
+@Data[Counter, {
+  Add[i64],
+  Query[Pid[i64, i64]]
+}];
+
+@Let[server, @Handler[[self : Pid[Counter, i64], total : i64] : i64,
+  @Match[@Receive[0u, Option/None[]], {
+    (/Some[message], @Match[message, {
+      (/Add[n], @Continue[AddI64[total, n]]),
+      (/Query[client], @Block[
+        @Let[_, @Send[client, 0u, total]],
+        total
+      ])
+    }]),
+    (/None[], total)
+  }]]];
+
+@Let[client, @Handler[
+  [self : Pid[i64, i64], remaining : i64, server : Pid[Counter, i64]] : i64,
+  @If[LessOrEqualI64[remaining, 0],
+    @Block[
+      @Let[_, @Send[server, 0u, Counter/Query[self]]],
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[total], total),
+        (/None[], -1)
+      }]
+    ],
+    @Block[
+      @Let[_, @Send[server, 0u, Counter/Add[1]]],
+      @Continue[SubI64[remaining, 1], server]
+    ]
+  ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[service, @Spawn[server, 0]],
+    @Let[worker, @Spawn[client, 20000, service]],
+    @Let[result, @ResultGet[@Join[worker], -1]],
+    @Let[_, @Join[service]],
+    Print[f"{result}\n"]
+  ]];

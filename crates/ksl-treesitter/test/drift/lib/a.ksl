@@ -1,0 +1,9 @@
+# 漂移语料的被导入模块: 值导出, 类型导出与类型重命名导出.
+
+@Export[sum, area, ^Kind, ^Point];
+
+@Def[sum, [x : i64, y : i64] : i64, AddI64[x, y]];
+@Def[area, [r : f64] : f64, MulF64[r, 3.14159]];
+
+@Data[Kind, {Origin[], Ray[f64]}];
+@Data[Point, {X[], Y[]}];

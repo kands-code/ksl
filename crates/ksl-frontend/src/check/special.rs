@@ -1,0 +1,670 @@
+//! 特殊形式的检查规则.
+
+use std::collections::HashSet;
+
+use ksl_base::source::Span;
+use ksl_base::symbol::{Symbol, keywords, resolve};
+
+use super::data::check_bindable;
+use super::infer::InferTy;
+use super::types::{HandlerType, PidType, Type};
+use super::{ActorContext, Checker};
+use crate::ast::{BindingTarget, Def, Expr, ExprKind, Special, TypeExpr};
+use crate::error::{ErrorKind, KslError};
+
+impl Checker {
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn check_special_expect(
+        &mut self,
+        form: &Special,
+        span: Span,
+        expected: Option<&InferTy>,
+    ) -> Result<InferTy, KslError> {
+        match form {
+            // `@Data` 与 `@Link` 在收集阶段已校验, 语句级不产生值.
+            Special::Data { .. } | Special::Link(_) => Ok(InferTy::Nil),
+            Special::Export { .. } | Special::Use { .. } => {
+                Err(KslError::new(ErrorKind::ModuleFormNotResolved, span))
+            },
+            Special::Let { target, value } => {
+                self.check_let(target, value)?;
+                // 绑定语句的值不被使用.
+                Ok(InferTy::Nil)
+            },
+            Special::Block(stmts) => {
+                self.env.push();
+                let result = (|| {
+                    let Some((last, init)) = stmts.split_last() else {
+                        return Ok(InferTy::Nil);
+                    };
+                    for stmt in init {
+                        self.check_value_used(stmt)?;
+                    }
+                    self.check_expr_expect(last, expected)
+                })();
+                self.env.pop();
+                result
+            },
+            Special::If { cond, then, els } => {
+                self.expect_type(cond, &Type::Bool)?;
+                let result = expected
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(span, "@If 结果"));
+                let then_ty = self.check_expr_expect(then, Some(&result))?;
+                self.infer.unify(&result, &then_ty, then.span)?;
+                let els_ty = self.check_expr_expect(els, Some(&result))?;
+                self.infer.unify(&result, &els_ty, els.span)?;
+                let then_never = matches!(self.infer.shallow(&then_ty), InferTy::Never);
+                let els_never = matches!(self.infer.shallow(&els_ty), InferTy::Never);
+                if then_never && els_never {
+                    Ok(InferTy::Never)
+                } else {
+                    Ok(result)
+                }
+            },
+            Special::Which { branches, fallback } => {
+                self.check_which(branches, fallback, expected, span)
+            },
+            Special::Fn { params, ret, body } => self.check_fn(params, ret, body),
+            Special::Def(def) => self.check_def(def),
+            Special::Exit { code } => {
+                self.expect_type(code, &Type::U8)?;
+                Ok(InferTy::Never)
+            },
+            Special::Handler { params, ret, body } => self.check_handler(params, ret, body),
+            Special::Main { params, ret, body } => {
+                let handler = self.check_main(params, ret, body, span)?;
+                Ok(InferTy::from_concrete(&handler.to_type()))
+            },
+            Special::Continue { args } => self.check_continue(args, span),
+            Special::Spawn {
+                handler,
+                args,
+                detached: _,
+            } => self.check_spawn(handler, args, span),
+            Special::Send {
+                pid,
+                index,
+                message,
+            } => self.check_send(pid, index, message, span),
+            Special::Receive { index, timeout } => self.check_receive(index, timeout, span),
+            Special::Join { pid } => {
+                self.require_actor(span)?;
+                self.check_join(pid)
+            },
+            Special::Kill { pid } => {
+                self.require_actor(span)?;
+                self.check_kill(pid)
+            },
+            Special::Monitor { pid } => self.check_monitor(pid, span),
+            Special::Unmonitor { id } => self.check_unmonitor(id, span),
+            Special::PidSerial { pid } => {
+                self.require_actor(span)?;
+                self.check_pid_serial(pid)
+            },
+            Special::SetTimer {
+                pid,
+                index,
+                message,
+                millis,
+            } => self.check_set_timer(pid, index, message, millis, span),
+            Special::CancelTimer { id } => self.check_cancel_timer(id, span),
+            Special::Halt => self.check_halt(span),
+            Special::Sleep { millis } => self.check_sleep(millis, span),
+            Special::Fix(defs) => self.check_fix(defs),
+            Special::Match { value, arms } => self.check_match_expect(value, arms, expected),
+            Special::ListOp { op, args } => self.check_list_op(*op, args, span, expected),
+            Special::PairOp { op, args } => self.check_pair_op(*op, args, span, expected),
+            Special::Dict { entries } => self.check_dict_literal(entries, span, expected),
+            Special::Set { items } => self.check_set_literal(items, span, expected),
+            Special::DictOp { op, args } => self.check_dict_op(*op, args, span, expected),
+            Special::SetOp { op, args } => self.check_set_op(*op, args, span, expected),
+            Special::Registry { op, args } => self.check_registry(*op, args, span, expected),
+            Special::OptionOp { op, args } => self.check_option_op(*op, args, span, expected),
+            Special::Assert { .. }
+            | Special::Panic { .. }
+            | Special::Todo { .. }
+            | Special::Unreachable { .. } => self.check_fail(form),
+        }
+    }
+
+    /// `@Which`: 条件分支与 fallback 共享结果类型.
+    ///
+    /// 字面量 `true` 或 `false` 作条件时报错; 空分支表只检查 fallback.
+    fn check_which(
+        &mut self,
+        branches: &[(Expr, Expr)],
+        fallback: &Expr,
+        expected: Option<&InferTy>,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        let result = expected
+            .cloned()
+            .unwrap_or_else(|| self.infer.fresh(span, "@Which 结果"));
+        let mut all_never = true;
+        for (cond, value) in branches {
+            if let ExprKind::Bool(value) = &cond.node {
+                return Err(KslError::new(
+                    ErrorKind::WhichLiteralCondition { value: *value },
+                    cond.span,
+                ));
+            }
+            self.expect_type(cond, &Type::Bool)?;
+            let value_ty = self.check_expr_expect(value, Some(&result))?;
+            self.infer.unify(&result, &value_ty, value.span)?;
+            if !matches!(self.infer.shallow(&value_ty), InferTy::Never) {
+                all_never = false;
+            }
+        }
+        let fallback_ty = self.check_expr_expect(fallback, Some(&result))?;
+        self.infer.unify(&result, &fallback_ty, fallback.span)?;
+        if !matches!(self.infer.shallow(&fallback_ty), InferTy::Never) {
+            all_never = false;
+        }
+        if all_never {
+            Ok(InferTy::Never)
+        } else {
+            Ok(result)
+        }
+    }
+
+    /// 用户主动中断: `@Assert`, `@Panic`, `@Todo` 与 `@Unreachable`.
+    ///
+    /// `@Assert` 的类型为 nil, 其余三者为 never. 信息参数须为 string.
+    fn check_fail(&mut self, form: &Special) -> Result<InferTy, KslError> {
+        match form {
+            Special::Assert { cond, message } => {
+                self.expect_type(cond, &Type::Bool)?;
+                self.expect_type(message, &Type::Str)?;
+                Ok(InferTy::Nil)
+            },
+            Special::Panic { message }
+            | Special::Todo { message }
+            | Special::Unreachable { message } => {
+                self.expect_type(message, &Type::Str)?;
+                Ok(InferTy::Never)
+            },
+            _ => unreachable!("非用户主动中断的形式"),
+        }
+    }
+
+    /// 绑定目标: 有标注时以标注为准校验值, 无标注时取值的类型.
+    pub(super) fn bind_target(
+        &mut self,
+        target: &BindingTarget,
+        value: &Expr,
+    ) -> Result<Type, KslError> {
+        if let Some(declared_expr) = &target.ty {
+            let declared = self.type_from_expr(declared_expr)?;
+            let expected = InferTy::from_concrete(&declared);
+            self.check_expr_expect(value, Some(&expected))?;
+            Ok(declared)
+        } else {
+            let ty = self.check_expr(value)?;
+            self.infer.finalize(&ty)
+        }
+    }
+
+    pub(super) fn check_let(
+        &mut self,
+        target: &BindingTarget,
+        value: &Expr,
+    ) -> Result<InferTy, KslError> {
+        let ty = self.bind_target(target, value)?;
+        if let Some(name) = &target.name {
+            self.bind_value(name, ty.clone())?;
+            self.infer_types.insert(name.key(), InferTy::from_concrete(&ty));
+        }
+        Ok(InferTy::Nil)
+    }
+
+    /// 登记一个局部值; Link 名字不可被任何作用域遮蔽.
+    pub(super) fn bind_value(
+        &mut self,
+        name: &crate::ast::Spanned<Symbol>,
+        ty: Type,
+    ) -> Result<(), KslError> {
+        check_bindable(name)?;
+        self.check_link_name(name.node, name.span)?;
+        self.env.insert(name.node, ty);
+        Ok(())
+    }
+
+    /// Link 名字在模块内不可被其他绑定使用.
+    fn check_link_name(&self, name: Symbol, span: Span) -> Result<(), KslError> {
+        if self.context.link_values.contains(&name) {
+            return Err(KslError::with_subject(
+                ErrorKind::LinkNameConflict {
+                    name: resolve(name).to_string(),
+                },
+                span,
+                resolve(name).to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 解析函数签名: 参数类型表与返回类型.
+    pub(super) fn fn_signature(
+        &mut self,
+        params: &[crate::ast::Param],
+        ret: &TypeExpr,
+    ) -> Result<(Vec<Type>, Type), KslError> {
+        let mut param_types = Vec::with_capacity(params.len());
+        for param in params {
+            param_types.push(self.type_from_expr(&param.ty)?);
+        }
+        let ret_ty = self.type_from_expr(ret)?;
+        Ok((param_types, ret_ty))
+    }
+
+    /// 在参数作用域内检查函数体; 普通函数与 Handler 共用.
+    pub(super) fn check_fn_body_inner(
+        &mut self,
+        params: &[crate::ast::Param],
+        param_types: &[Type],
+        body: &Expr,
+        ret_ty: &Type,
+    ) -> Result<(), KslError> {
+        self.env.push();
+        let result = (|| {
+            let mut seen = HashSet::new();
+            for (param, ty) in params.iter().zip(param_types) {
+                if !seen.insert(param.name.node) {
+                    return Err(KslError::with_subject(
+                        ErrorKind::DuplicateParam,
+                        param.name.span,
+                        resolve(param.name.node).to_string(),
+                    ));
+                }
+                self.bind_value(&param.name, ty.clone())?;
+                self.infer_types
+                    .insert(param.name.key(), InferTy::from_concrete(ty));
+            }
+            let body_ty =
+                self.check_expr_expect(body, Some(&InferTy::from_concrete(ret_ty)))?;
+            // 期望统一已在 check_expr_expect 内完成.
+            // 仅解析剩余的类型变量; 未定类型的错误位置由变量来源给出.
+            self.infer.finalize(&body_ty)?;
+            Ok(())
+        })();
+        self.env.pop();
+        result
+    }
+
+    /// 普通函数体: 不继承外层 Handler 上下文.
+    pub(super) fn check_fn_body(
+        &mut self,
+        params: &[crate::ast::Param],
+        param_types: &[Type],
+        body: &Expr,
+        ret_ty: &Type,
+    ) -> Result<(), KslError> {
+        let saved = self.actor.take();
+        let result = self.check_fn_body_inner(params, param_types, body, ret_ty);
+        self.actor = saved;
+        result
+    }
+
+    /// `@Handler`: 首参数必须是 Pid, 返回类型与 Pid 的返回类型一致.
+    pub(super) fn check_handler(
+        &mut self,
+        params: &[crate::ast::Param],
+        ret: &TypeExpr,
+        body: &Expr,
+    ) -> Result<InferTy, KslError> {
+        let (param_types, ret_ty) = self.fn_signature(params, ret)?;
+        let Some(first) = param_types.first() else {
+            return Err(KslError::new(ErrorKind::InvalidHandlerParam, body.span));
+        };
+        let Some(pid_ret) = first.as_pid().map(|(_, ret)| ret) else {
+            return Err(KslError::new(ErrorKind::InvalidHandlerParam, body.span));
+        };
+        if pid_ret != &ret_ty {
+            return Err(KslError::with_subject(
+                ErrorKind::TypeMismatch {
+                    expected: pid_ret.clone(),
+                    found: ret_ty,
+                },
+                body.span,
+                "Handler 返回值",
+            ));
+        }
+        let handler = HandlerType {
+            pid: Box::new(first.clone()),
+            args: param_types[1..].to_vec(),
+        };
+        let saved = self.actor.replace(ActorContext {
+            handler: handler.clone(),
+            main: false,
+        });
+        let result = self.check_fn_body_inner(params, &param_types, body, &ret_ty);
+        self.actor = saved;
+        result?;
+        Ok(InferTy::from_concrete(&handler.to_type()))
+    }
+
+    /// `@Main`: 仅一个 self 参数, 返回 nil; 体按 Actor 上下文检查.
+    pub(super) fn check_main(
+        &mut self,
+        params: &[crate::ast::Param],
+        ret: &TypeExpr,
+        body: &Expr,
+        span: Span,
+    ) -> Result<HandlerType, KslError> {
+        let (param_types, ret_ty) = self.fn_signature(params, ret)?;
+        if param_types.len() != 1 {
+            return Err(KslError::new(ErrorKind::InvalidMainParam, span));
+        }
+        let Some(pid_ret) = param_types[0].as_pid().map(|(_, ret)| ret) else {
+            return Err(KslError::new(ErrorKind::InvalidMainParam, span));
+        };
+        if ret_ty != Type::Nil || *pid_ret != Type::Nil {
+            return Err(KslError::new(ErrorKind::InvalidMainReturn, span));
+        }
+        let handler = HandlerType {
+            pid: Box::new(param_types[0].clone()),
+            args: Vec::new(),
+        };
+        let saved = self.actor.replace(ActorContext {
+            handler: handler.clone(),
+            main: true,
+        });
+        let result = self.check_fn_body_inner(params, &param_types, body, &ret_ty);
+        self.actor = saved;
+        result?;
+        Ok(handler)
+    }
+
+    /// Actor 原语要求当前位于 Handler 或 Main 体内.
+    fn require_actor(&self, span: Span) -> Result<(), KslError> {
+        if self.actor.is_none() {
+            Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// `@Continue`: 只允许在 Handler 体内, 参数匹配 Handler 的状态参数.
+    pub(super) fn check_continue(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        let Some(actor) = self.actor.clone() else {
+            return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
+        };
+        if actor.main {
+            return Err(KslError::new(ErrorKind::ContinueInMain, span));
+        }
+        let expected = actor.handler.args;
+        Self::check_arity(args, expected.len(), span)?;
+        for (arg, ty) in args.iter().zip(&expected) {
+            self.expect_type(arg, ty)?;
+        }
+        Ok(InferTy::Never)
+    }
+
+    /// 从表达式取信箱索引. 索引必须是 u8 字面量, 即带 `u` 后缀的整数字面量.
+    pub(super) fn literal_index(expr: &Expr, what: &'static str) -> Result<usize, KslError> {
+        match &expr.node {
+            ExprKind::U8(value) => Ok(usize::from(*value)),
+            ExprKind::I64(_) => Err(KslError::with_subject(
+                ErrorKind::TypeMismatch {
+                    expected: Type::U8,
+                    found: Type::I64,
+                },
+                expr.span,
+                what,
+            )),
+            _ => Err(KslError::with_subject(
+                ErrorKind::U8LiteralRequired,
+                expr.span,
+                what,
+            )),
+        }
+    }
+
+    /// 表达式须为 Pid 类型, 否则报 `NotPid` 错误.
+    pub(super) fn expect_pid(&mut self, expr: &Expr) -> Result<PidType, KslError> {
+        let ty = self.check_expr(expr)?;
+        let found = self.infer.finalize(&ty)?;
+        PidType::from_type(&found)
+            .ok_or_else(|| KslError::new(ErrorKind::NotPid { found }, expr.span))
+    }
+
+    pub(super) fn check_spawn(
+        &mut self,
+        handler: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        self.require_actor(span)?;
+        let handler_span = handler.span;
+        let handler_ty = self.check_expr(handler)?;
+        let handler_ty = self.infer.finalize(&handler_ty)?;
+        let Some((pid, handler_args)) = handler_ty.as_handler() else {
+            return Err(KslError::new(
+                ErrorKind::NotHandler { found: handler_ty },
+                handler_span,
+            ));
+        };
+        self.check_args(handler_args, pid, args, span)
+    }
+
+    pub(super) fn check_send(
+        &mut self,
+        pid: &Expr,
+        index: &Expr,
+        message: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        self.require_actor(span)?;
+        self.check_send_message(pid, index, message)?;
+        Ok(InferTy::Bool)
+    }
+
+    fn check_send_message(
+        &mut self,
+        pid: &Expr,
+        index: &Expr,
+        message: &Expr,
+    ) -> Result<(), KslError> {
+        let pid = self.expect_pid(pid)?;
+        let i = Self::literal_index(index, "信箱索引")?;
+        self.infer_types.insert(index.key(), InferTy::U8);
+        let count = pid.mailboxes.len();
+        let Some(expected) = pid.mailboxes.get(i) else {
+            return Err(KslError::new(
+                ErrorKind::MailboxIndexOutOfRange { index: i, count },
+                index.span,
+            ));
+        };
+        let expected = InferTy::from_concrete(expected);
+        self.check_expr_expect(message, Some(&expected))?;
+        Ok(())
+    }
+
+    pub(super) fn check_set_timer(
+        &mut self,
+        pid: &Expr,
+        index: &Expr,
+        message: &Expr,
+        millis: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        self.require_actor(span)?;
+        self.check_send_message(pid, index, message)?;
+        self.expect_type(millis, &Type::U64)?;
+        Ok(InferTy::option(InferTy::U64))
+    }
+
+    pub(super) fn check_cancel_timer(
+        &mut self,
+        id: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        self.require_actor(span)?;
+        self.expect_type(id, &Type::U64)?;
+        Ok(InferTy::Bool)
+    }
+
+    pub(super) fn check_receive(
+        &mut self,
+        index: &Expr,
+        timeout: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        let Some(actor) = self.actor.clone() else {
+            return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
+        };
+        let Some((mailboxes, _)) = actor.handler.pid.as_pid() else {
+            unreachable!("Handler 的 pid 字段已校验为 Pid 类型");
+        };
+        let i = Self::literal_index(index, "信箱索引")?;
+        self.infer_types.insert(index.key(), InferTy::U8);
+        let count = mailboxes.len();
+        let Some(elem) = mailboxes.get(i) else {
+            return Err(KslError::new(
+                ErrorKind::MailboxIndexOutOfRange { index: i, count },
+                index.span,
+            ));
+        };
+        self.expect_type(timeout, &Type::option(Type::U64))?;
+        Ok(InferTy::option(InferTy::from_concrete(elem)))
+    }
+
+    pub(super) fn check_join(&mut self, pid: &Expr) -> Result<InferTy, KslError> {
+        let pid = self.expect_pid(pid)?;
+        Ok(InferTy::result(
+            InferTy::from_concrete(pid.ret.as_ref()),
+            InferTy::data(keywords().exit_reason_),
+        ))
+    }
+
+    pub(super) fn check_kill(&mut self, pid: &Expr) -> Result<InferTy, KslError> {
+        self.expect_pid(pid)?;
+        Ok(InferTy::Bool)
+    }
+
+    pub(super) fn check_pid_serial(&mut self, pid: &Expr) -> Result<InferTy, KslError> {
+        self.expect_pid(pid)?;
+        Ok(InferTy::U64)
+    }
+
+    pub(super) fn check_monitor(
+        &mut self,
+        pid: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        let Some(actor) = self.actor.clone() else {
+            return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
+        };
+        self.expect_pid(pid)?;
+        let Some((mailboxes, _)) = actor.handler.pid.as_pid() else {
+            unreachable!("Handler 的 pid 字段已校验为 Pid 类型");
+        };
+        let Some(mailbox) = mailboxes.last() else {
+            unreachable!("Pid 类型至少包含一个信箱");
+        };
+        let notice = Type::pair(Type::U64, Type::data(keywords().exit_reason_));
+        if *mailbox != notice {
+            return Err(KslError::with_subject(
+                ErrorKind::TypeMismatch {
+                    expected: notice,
+                    found: mailbox.clone(),
+                },
+                span,
+                "监视信箱",
+            ));
+        }
+        Ok(InferTy::option(InferTy::U64))
+    }
+
+    pub(super) fn check_unmonitor(
+        &mut self,
+        id: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        if self.actor.is_none() {
+            return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
+        }
+        self.expect_type(id, &Type::U64)?;
+        Ok(InferTy::Bool)
+    }
+
+    pub(super) fn check_halt(&mut self, span: Span) -> Result<InferTy, KslError> {
+        let Some(actor) = &self.actor else {
+            return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
+        };
+        if actor.main {
+            return Err(KslError::new(ErrorKind::HaltInMain, span));
+        }
+        Ok(InferTy::Never)
+    }
+
+    pub(super) fn check_sleep(
+        &mut self,
+        millis: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        if self.actor.is_none() {
+            return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
+        }
+        self.expect_type(millis, &Type::U64)?;
+        Ok(InferTy::Nil)
+    }
+
+    /// 匿名 `@Fn`: 类型完全由参数与返回标注决定.
+    pub(super) fn check_fn(
+        &mut self,
+        params: &[crate::ast::Param],
+        ret: &TypeExpr,
+        body: &Expr,
+    ) -> Result<InferTy, KslError> {
+        let (param_types, ret_ty) = self.fn_signature(params, ret)?;
+        self.check_fn_body(params, &param_types, body, &ret_ty)?;
+        Ok(InferTy::from_concrete(&Type::Fn(param_types, Box::new(ret_ty))))
+    }
+
+    /// 具名 `@Def`: 先把签名放进当前作用域, 再检查体, 以支持自递归.
+    pub(super) fn check_def(&mut self, def: &Def) -> Result<InferTy, KslError> {
+        check_bindable(&def.name)?;
+        self.check_link_name(def.name.node, def.name.span)?;
+        let (param_types, ret_ty) = self.fn_signature(&def.params, &def.ret)?;
+        let fn_ty = Type::Fn(param_types.clone(), Box::new(ret_ty.clone()));
+        self.infer_types
+            .insert(def.name.key(), InferTy::from_concrete(&fn_ty));
+        self.env.insert(def.name.node, fn_ty);
+        self.check_fn_body(&def.params, &param_types, &def.body, &ret_ty)?;
+        Ok(InferTy::Nil)
+    }
+
+    /// `@Fix`: 先登记组内全部签名, 再逐个检查体, 以支持互递归.
+    pub(super) fn check_fix(&mut self, defs: &[Def]) -> Result<InferTy, KslError> {
+        let mut prebound: Vec<(Symbol, Type, Vec<Type>, Type)> = Vec::new();
+        for def in defs {
+            check_bindable(&def.name)?;
+            self.check_link_name(def.name.node, def.name.span)?;
+            if prebound.iter().any(|(name, ..)| *name == def.name.node) {
+                return Err(KslError::with_subject(
+                    ErrorKind::DuplicateFixName,
+                    def.name.span,
+                    resolve(def.name.node).to_string(),
+                ));
+            }
+            let (param_types, ret_ty) = self.fn_signature(&def.params, &def.ret)?;
+            let fn_ty = Type::Fn(param_types.clone(), Box::new(ret_ty.clone()));
+            prebound.push((def.name.node, fn_ty, param_types, ret_ty));
+        }
+        for (name, fn_ty, ..) in &prebound {
+            self.env.insert(*name, fn_ty.clone());
+        }
+        for (def, (_, fn_ty, param_types, ret_ty)) in defs.iter().zip(&prebound) {
+            self.infer_types
+                .insert(def.name.key(), InferTy::from_concrete(fn_ty));
+            self.check_fn_body(&def.params, param_types, &def.body, ret_ty)?;
+        }
+        Ok(InferTy::Nil)
+    }
+}

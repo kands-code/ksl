@@ -1,0 +1,26 @@
+# 监督策略: 子 Actor 因运行时错误终止后重新 spawn.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[failing, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+      @If[EqualI64[n, 0], 42, DivideI64[1, 0]]]],
+    @Let[retrying_on_failure, @Handler[
+      [self : Pid[i64, Pair[u64, ExitReason], i64], attempt : i64] : i64,
+      @Block[
+        @Let[child, @Spawn[failing, SubI64[attempt, 1]]],
+        @Let[_, @Monitor[child]],
+        @Match[@Receive[1u, Option/None[]], {
+          (/Some[notice], @Match[@Snd[notice], {
+            (/Halted[], @Match[@Join[child], { (/Ok[v], v), (/Err[_], -1) }]),
+            (/Killed[], -2),
+            (/Failed[_, _],
+              @If[EqualI64[attempt, 1], -3, @Continue[SubI64[attempt, 1]]])
+          }]),
+          (/None[], -4)
+        }]
+      ]]],
+    @Let[s1, @Spawn[retrying_on_failure, 3]],
+    @Assert[
+      EqualI64[@Match[@Join[s1], { (/Ok[v], v), (/Err[_], -5) }], 42],
+      "失败后重启并成功"
+    ]
+  ]]

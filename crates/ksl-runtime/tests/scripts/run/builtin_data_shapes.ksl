@@ -1,0 +1,36 @@
+@Def[keyTag, [k : KeyEvent] : string,
+  @Match[k, {
+    (KeyEvent/Char[c], "char"),
+    (KeyEvent/Ctrl[c], "ctrl"),
+    (KeyEvent/Alt[c], "alt"),
+    (KeyEvent/F[n], "f"),
+    (KeyEvent/Enter[], "enter"),
+    (KeyEvent/Escape[], "escape"),
+    (KeyEvent/Backspace[], "backspace"),
+    (KeyEvent/Tab[], "tab"),
+    (KeyEvent/BackTab[], "backtab"),
+    (KeyEvent/Up[], "up"),
+    (KeyEvent/Down[], "down"),
+    (KeyEvent/Left[], "left"),
+    (KeyEvent/Right[], "right"),
+    (KeyEvent/Home[], "home"),
+    (KeyEvent/End[], "end"),
+    (KeyEvent/PageUp[], "pageup"),
+    (KeyEvent/PageDown[], "pagedown"),
+    (KeyEvent/Delete[], "delete"),
+    (KeyEvent/Insert[], "insert")
+  }]];
+@Let[_, keyTag[KeyEvent/Char['a']]];
+@Def[inputTag, [e : InputError] : string,
+  @Match[e, {
+    (InputError/NotATerminal[], "not a terminal"),
+    (InputError/Interrupted[], "interrupted"),
+    (InputError/RawModeActive[], "raw mode active"),
+    (InputError/RawModeHeld[], "raw mode held"),
+    (InputError/NotRawModeHolder[], "not raw mode holder"),
+    (InputError/RawModeReleased[], "raw mode released"),
+    (InputError/Other[message], message)
+  }]];
+@Let[_, inputTag[InputError/Interrupted[]]];
+@Let[_, inputTag[InputError/RawModeHeld[]]];
+@Let[_ : List[u8], {1u, 2u}];

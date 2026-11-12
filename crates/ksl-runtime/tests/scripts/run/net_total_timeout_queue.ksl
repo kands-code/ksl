@@ -1,0 +1,56 @@
+# 默认总时限包含排队时间; 单次读不等待前序读操作完成.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[_], @Panic["TcpListen 失败"])
+    }]],
+    @Let[port, TcpLocalPort[listener]],
+    @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+      @Match[TcpAccept[listener, 5000U], {
+        (/Ok[socket], @Block[
+          @Sleep[300U],
+          @Let[written, SocketWriteLine[socket, "x", 5000U]],
+          @Assert[@IsOk[written], "服务端写入应成功"],
+          SocketClose[socket],
+          nil
+        ]),
+        (/Err[_], @Panic["TcpAccept 失败"])
+      }]]],
+    @Let[server_pid, @Spawn[server, listener]],
+    @Let[socket, @Match[TcpConnect["127.0.0.1", port, 5000U], {
+      (/Ok[socket], socket),
+      (/Err[_], @Panic["TcpConnect 失败"])
+    }]],
+    @Let[limited, @Handler[
+      [self : Pid[nil, Result[Option[List[u8]], SocketError]], socket : Socket]
+        : Result[Option[List[u8]], SocketError],
+      @Block[
+        @Sleep[50U],
+        SocketRead[socket, 1U, 100U]
+      ]]],
+    @Let[limited_pid, @Spawn[limited, socket]],
+    @Let[line, SocketReadLine[socket, 1024U, 5000U]],
+    @Let[text, @Match[line, {
+      (/Ok[line], @Match[line, {
+        (/Some[text], text),
+        (/None[], @Panic["主读取意外 EOF"])
+      }]),
+      (/Err[_], @Panic["主读取失败"])
+    }]],
+    @Let[result, @Match[@Join[limited_pid], {
+      (/Ok[result], result),
+      (/Err[_], @Panic["总时限读取者 Join 失败"])
+    }]],
+    @Let[_, @Match[result, {
+      (/Ok[_], @Panic["总时限应包含排队时间"]),
+      (/Err[error], @Match[error, {
+        (/TimedOut[], nil),
+        (_, @Panic["总时限错误类别不是 TimedOut"])
+      }])
+    }]],
+    @Assert[EqualString[text, "x"], "前序读取应正常完成"],
+    SocketClose[socket],
+    @Let[_, @Join[server_pid]],
+    TcpCloseListener[listener]
+  ]]

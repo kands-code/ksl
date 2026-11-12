@@ -1,0 +1,37 @@
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[_], @Panic["TcpListen 失败"])
+    }]],
+    @Let[acceptor, @Handler[[self : Pid[nil, bool], listener : TcpListener] : bool,
+      @Block[
+        @Match[TcpAccept[listener, 5000U], {
+          (/Ok[_], false),
+          (/Err[error], @Match[error, {
+            (/Closed[], true),
+            (_, false)
+          }])
+        }]
+      ]]],
+    @Let[acceptor_pid, @Spawn[acceptor, listener]],
+    @Sleep[100U],
+    TcpCloseListener[listener],
+    @Match[@Join[acceptor_pid], {
+      (/Ok[closed], @Assert[closed, "关闭监听器应唤醒等待中的接受"]),
+      (/Err[_], @Panic["接受者 Join 失败"])
+    }],
+    @Let[timeout_listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[_], @Panic["TcpListen 失败"])
+    }]],
+    @Match[TcpAccept[timeout_listener, 50U], {
+      (/Ok[_], @Panic["空监听器不应接受连接"]),
+      (/Err[error], @Assert[@Match[error, {
+        (/TimedOut[], true),
+        (_, false)
+      }], "空监听器接受应超时"])
+    }],
+    TcpCloseListener[timeout_listener]
+  ]]

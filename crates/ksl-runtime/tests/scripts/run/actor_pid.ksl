@@ -1,0 +1,19 @@
+# Pid 身份与消息投递的返回值.
+@Let[echo, @Handler[[self : Pid[i64, i64]] : i64,
+  @Match[@Receive[0u, Option/None[]], { (/Some[x], x), (/None[], 0) }]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[a, @Spawn[echo]],
+    @Let[b, @Spawn[echo]],
+    @Let[serial, @PidSerial[a]],
+    @Assert[EqualU64[serial, @PidSerial[a]], "同一 Pid 编号稳定"],
+    @Assert[Not[EqualU64[serial, @PidSerial[b]]], "不同 Pid 编号不同"],
+    @Assert[EqualBool[@Send[a, 0u, 5], true], "存活目标接受消息"],
+    @Assert[
+      EqualI64[@Match[@Join[a], { (/Ok[v], v), (/Err[_], -1) }], 5],
+      "投递的消息被接收"
+    ],
+    @Assert[EqualBool[@Send[a, 0u, 6], false], "已终止目标拒绝消息"],
+    @Let[_, @Kill[b]]
+  ]]

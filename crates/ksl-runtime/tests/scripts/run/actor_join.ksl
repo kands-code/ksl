@@ -1,0 +1,15 @@
+# 多个 Join 等待者共享同一结果.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[slow, @Handler[[self : Pid[i64, i64]] : i64, @Block[@Sleep[10U], 7]]],
+    @Let[waiter, @Handler[[self : Pid[i64, i64], t : Pid[i64, i64]] : i64,
+      @Match[@Join[t], { (/Ok[v], v), (/Err[_], -1) }]]],
+    @Let[t, @Spawn[slow]],
+    @Let[w1, @Spawn[waiter, t]],
+    @Let[w2, @Spawn[waiter, t]],
+    @Let[v1, @Match[@Join[w1], { (/Ok[v], v), (/Err[_], -2) }]],
+    @Assert[
+      EqualI64[@Match[@Join[w2], { (/Ok[v], v), (/Err[_], -3) }], v1],
+      "多个 Join 等待者共享结果"
+    ]
+  ]]

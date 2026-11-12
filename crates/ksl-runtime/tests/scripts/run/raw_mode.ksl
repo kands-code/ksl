@@ -1,0 +1,20 @@
+# 进入原始模式的结果取决于标准输入是否为终端;
+# 未进入原始模式时退出为空操作, 因此不依赖终端状态.
+@Let[entered, @Match[EnterRawMode[], {
+  (/Ok[_], 0),
+  (/Err[e], @Match[e, {
+    (/NotATerminal[], 1),
+    (_, 2)
+  }])
+}]];
+@Let[exited, @Match[ExitRawMode[], {
+  (/Ok[_], 0),
+  (/Err[_e], 1)
+}]];
+@Let[exited_again, @Match[ExitRawMode[], {
+  (/Ok[_], 0),
+  (/Err[_e], 1)
+}]];
+@Assert[EqualBool[LessI64[entered, 2], true], "进入原始模式只报 NotATerminal"];
+@Assert[EqualI64[exited, 0], "退出原始模式成功"];
+@Assert[EqualI64[exited_again, 0], "重复退出原始模式成功"];

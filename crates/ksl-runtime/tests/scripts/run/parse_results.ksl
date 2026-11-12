@@ -1,0 +1,63 @@
+@Assert[
+  @Match[ParseI64[""], {
+    (/Err[e], @Match[e, { (/Empty[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "空整数串"
+];
+@Assert[
+  @Match[ParseI64["x"], {
+    (/Err[e], @Match[e, { (/Invalid[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "非法整数字符"
+];
+@Assert[
+  @Match[ParseI64["999999999999999999999999"], {
+    (/Err[e], @Match[e, { (/OutOfRange[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "整数溢出"
+];
+@Assert[
+  @Match[ParseF64[""], {
+    (/Err[e], @Match[e, { (/Empty[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "空浮点串"
+];
+@Assert[
+  @Match[ParseF64["x"], {
+    (/Err[e], @Match[e, { (/Invalid[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "非法浮点格式"
+];
+@Assert[
+  @Match[ParseU64["99999999999999999999999999"], {
+    (/Err[e], @Match[e, { (/OutOfRange[], true), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "无符号整数溢出"
+];
+@Assert[
+  @Match[DecodeUtf8[{255u}], {
+    (/Err[e], @Match[e, { (/Invalid[offset], EqualU64[offset, 0U]), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "非法 UTF-8"
+];
+@Assert[
+  @Match[DecodeUtf8[{97u, 255u}], {
+    (/Err[e], @Match[e, { (/Invalid[offset], EqualU64[offset, 1U]), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "非法 UTF-8 偏移按字节计"
+];
+@Assert[
+  @Match[DecodeUtf8[{195u}], {
+    (/Err[e], @Match[e, { (/Incomplete[offset], EqualU64[offset, 0U]), (_, false) }]),
+    (/Ok[_], false)
+  }],
+  "不完整 UTF-8"
+];

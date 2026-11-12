@@ -1,0 +1,58 @@
+# 按键计数器: 统计方向键, 字符键与其余按键的次数.
+#
+# 画面在提示符下方原地重绘, 每次按键后把光标移回画面首行重画.
+# 退出后画面只留统计结果.
+# 标准输入不是终端时只打印提示后退出.
+
+@Def[render, [arrow : i64, chr : i64, other : i64] : string,
+  @Block[
+    @Let[total, AddI64[AddI64[arrow, chr], other]],
+    StringJoin[{
+      "\u{1b}[1A\r",
+      f"keys={total} arrow={arrow} char={chr} other={other}\u{1b}[K\r\n",
+      "press q to quit\u{1b}[K"
+    }]
+  ]];
+
+@Let[counter, @Handler[[self : Pid[nil, nil], arrow : i64, chr : i64, other : i64] : nil,
+  @Block[
+    Print[render[arrow, chr, other]],
+    @Match[ReadKey[], {
+      (Result/Ok[key], @Block[
+        @Match[key, {
+          (KeyEvent/Char[c], @If[EqualChar[c, 'q'],
+            nil,
+            @Continue[arrow, AddI64[chr, 1], other]]),
+          (KeyEvent/Ctrl[c], @If[EqualChar[c, 'c'],
+            nil,
+            @Continue[arrow, chr, AddI64[other, 1]]]),
+          (KeyEvent/Up[], @Continue[AddI64[arrow, 1], chr, other]),
+          (KeyEvent/Down[], @Continue[AddI64[arrow, 1], chr, other]),
+          (KeyEvent/Left[], @Continue[AddI64[arrow, 1], chr, other]),
+          (KeyEvent/Right[], @Continue[AddI64[arrow, 1], chr, other]),
+          (_, @Continue[arrow, chr, AddI64[other, 1]])
+        }]
+      ]),
+      (Result/Err[_error], nil)
+    }]
+  ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Match[EnterRawMode[], {
+      (Result/Ok[_], @Block[
+        # 预留两行画面; 渲染时把光标从末行移回首行.
+        Print["\r\n\r\n"],
+        @Let[pid, @Spawn[counter, 0, 0, 0]],
+        @Let[_, @Join[pid]],
+        # 计数器停在提示行末尾, 清掉提示行只留统计结果.
+        Print["\r\u{1b}[K"],
+        @Let[_, ExitRawMode[]]
+      ]),
+      (Result/Err[error], @Match[error, {
+        (InputError/NotATerminal[],
+          Print["按键计数需要终端; 请在交互式终端中运行本示例.\n"]),
+        (_, Print["无法进入原始模式.\n"])
+      }])
+    }]
+  ]];

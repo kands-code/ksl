@@ -1,0 +1,28 @@
+# Helix 高亮示例: 字面量, 绑定, 函数, Data, 集合与格式化字符串.
+
+@Data[Shape, {
+  Point[],
+  Circle[f64]
+}];
+
+@Def[area, [shape : Shape] : f64,
+  @Match[shape, {
+    (Shape/Point[], 0.0),
+    (Shape/Circle[r], MulF64[r, r])
+  }]];
+
+@Let[count : u8, 3u];
+@Let[scale : f64, 2.5];
+@Let[names : List[string], {"Ada", "Lin", "Kai"}];
+@Let[flags, @Dict[("fast", true), ("safe", true)]];
+@Let[labels, @Set["a", "b"]];
+@Let[increment, @Fn[[x : i64] : i64, AddI64[x, 1]]];
+
+@Let[circle, Shape/Circle[1.5]];
+@Let[result, area[circle]];
+@Let[message, f"area={result:0.2}"];
+@Let[raw, r"a\nb"];
+
+@If[GreaterF64[result, 0.0],
+  Print[message],
+  Print["empty"]]

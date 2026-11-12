@@ -1,0 +1,23 @@
+# 监督策略: 子 Actor 正常结束后重新 spawn.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[halting, @Handler[[self : Pid[i64, i64], n : i64] : i64, n]],
+    @Let[retrying_on_halt, @Handler[
+      [self : Pid[Pair[u64, ExitReason], i64], attempt : i64] : i64,
+      @Block[
+        @Let[child, @Spawn[halting, attempt]],
+        @Let[_, @Monitor[child]],
+        @Match[@Receive[0u, Option/None[]], {
+          (/Some[notice], @Match[@Snd[notice], {
+            (/Halted[], @If[EqualI64[attempt, 3], attempt, @Continue[AddI64[attempt, 1]]]),
+            (_, -1)
+          }]),
+          (/None[], -2)
+        }]
+      ]]],
+    @Let[s2, @Spawn[retrying_on_halt, 1]],
+    @Assert[
+      EqualI64[@Match[@Join[s2], { (/Ok[v], v), (/Err[_], -3) }], 3],
+      "监督重启不应被过期唤醒打断"
+    ]
+  ]]

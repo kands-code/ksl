@@ -1,0 +1,33 @@
+# 类型标注, 推断与类型化操作.
+
+@Let[x8 : u8, 12u];
+@Let[sum8, AddU8[1u, 2u]];
+@Let[xs : List[u8], {1u, 2u}];
+@Let[empty : List[i64], {}];
+@Let[fn8 : Fn[[] : u8], @Fn[[] : u8, 1u]];
+@Let[pair : Pair[u8, i64], (255u, 256)];
+@Let[float_pair : Pair[u8, f64], (1u, 2.0)];
+@Let[first, @ListGet[{1, 2}, 0U]];
+@Let[to_text : Fn[[i64] : string], @Fn[[n : i64] : string, "x"]];
+@Let[mapped, @ListMap[{1, 2}, to_text]];
+@Let[fold : Fn[[i64, i64] : i64], @Fn[[a : i64, b : i64] : i64, a]];
+@Let[folded, @ListFold[{1, 2}, fold, 0]];
+@Let[left, @Fst[(1, 'a')]];
+@Let[folded8, @ListFold[{1u}, @Fn[[a : u8, b : u8] : u8, a], 1u]];
+@Let[mapped8 : List[u8], @ListMap[{1u, 2u}, @Fn[[n : u8] : u8, n]]];
+
+@Let[flag, true];
+@Let[some_first, @If[flag, Option/Some[1], Option/None[]]];
+@Let[none_first, @If[flag, Option/None[], Option/Some[1]]];
+@Let[matched, @Match[some_first, { (/Some[v], v), (/None[], 0) }]];
+@Let[empty_branch, @If[flag, {}, {1}]];
+@Let[some_none, {Option/None[], Option/Some[1]}];
+@Let[none_some, {Option/Some[1], Option/None[]}];
+@Let[ints, {1, 2}];
+@Let[u8s, {1u, 2u}];
+@Let[option : Option[i64], Option/None[]];
+@Let[result : Result[i64, string], Result/Ok[10]];
+@Let[error : Result[i64, string], Result/Err["e"]];
+
+@Data[P, {Init[string, u8]}];
+@Let[init, P/Init["k", 10u]];

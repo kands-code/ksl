@@ -1,0 +1,4 @@
+@Let[d : Dict[string, i64], @DictFromEntries[{}]];
+@Let[s : Set[i64], @SetFromList[{}]];
+@Let[es : List[Pair[string, i64]], @DictEntries[@Dict[]]];
+@Let[items : List[i64], @SetItems[@Set[]]];

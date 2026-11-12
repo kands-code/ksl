@@ -1,0 +1,27 @@
+# 阻塞在命令信箱时仍要轮询监视信箱.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[slow, @Handler[[self : Pid[i64, i64]] : i64, @Block[@Sleep[20U], 9]]],
+    @Let[polling, @Handler[
+      [self : Pid[i64, Pair[u64, ExitReason], i64],
+       child : Option[Pid[i64, i64]], mon : u64] : i64,
+      @Match[child, {
+        (/None[], @Block[
+          @Let[c, @Spawn[slow]],
+          @Let[id, @Match[@Monitor[c], { (/Some[id], id), (/None[], 0U) }]],
+          @Continue[Option/Some[c], id]
+        ]),
+        (/Some[c], @Match[@Receive[0u, Option/Some[5U]], {
+          (/Some[_], -2),
+          (/None[], @Match[@Receive[1u, Option/Some[0U]], {
+            (/Some[_], @Match[@Join[c], { (/Ok[v], v), (/Err[_], -3) }]),
+            (/None[], @Continue[child, mon])
+          }])
+        }])
+      }]]],
+    @Let[s7, @Spawn[polling, Option/None[], 0U]],
+    @Assert[
+      EqualI64[@Match[@Join[s7], { (/Ok[v], v), (/Err[_], -4) }], 9],
+      "阻塞在命令信箱时轮询监视信箱"
+    ]
+  ]]

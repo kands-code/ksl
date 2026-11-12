@@ -1,0 +1,15 @@
+# Actor 与 Pid 的类型标注.
+@Def[pid_arg, [p : Pid[i64, string]] : nil, nil];
+@Def[multi_mailbox, [p : Pid[i64, f64, string]] : nil, nil];
+@Def[handler_arg, [h : Handler[Pid[i64, string]]] : nil, nil];
+@Def[handler_state, [h : Handler[Pid[i64, string], i64]] : nil, nil];
+@Def[exit_code, [e : ExitReason] : i64,
+  @Match[e, {
+    (/Halted[], 0),
+    (/Killed[], 1),
+    (/Failed[c, m], c)
+  }]];
+@Let[halted, ExitReason/Halted[]];
+@Let[handler, @Handler[[self : Pid[i64, string], n : i64] : string, "ok"]];
+@Let[continuing, @Handler[[self : Pid[i64, string], n : i64] : string,
+  @Continue[1]]];

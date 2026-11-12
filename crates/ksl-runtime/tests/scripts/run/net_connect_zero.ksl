@@ -1,0 +1,19 @@
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[result, TcpConnect["127.0.0.1", 1U, 0U]],
+    @Assert[@IsErr[result], "TcpConnect 的零超时应失败"],
+    @Assert[
+      EqualString[
+        @Match[result, {
+          (/Ok[_], "ok"),
+          (/Err[error], @Match[error, {
+            (/InvalidArgument[message], message),
+            (_, "other")
+          }])
+        }],
+        "TcpConnect 的 timeout 必须大于 0"
+      ],
+      "TcpConnect 的零超时应报 InvalidArgument"
+    ]
+  ]]

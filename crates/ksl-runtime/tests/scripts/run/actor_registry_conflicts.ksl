@@ -1,0 +1,24 @@
+# 名字登记的类型冲突与显式注销.
+@Let[blocking, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+  @Match[@Receive[0u, Option/None[]], { (/Some[m], m), (/None[], n) }]]];
+@Let[waits_one, @Handler[[self : Pid[string, i64], s : string] : i64,
+  @Match[@Receive[0u, Option/None[]], { (/Some[_], 1), (/None[], 1) }]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[pa, @Spawn[blocking, 1]],
+    @Let[pb, @Spawn[waits_one, "y"]],
+    @Assert[EqualBool[@Register["conflict", pa], true], "冲突用例的首次登记"],
+    @Assert[EqualBool[@Register["conflict", pb], false], "类型冲突拒绝新登记"],
+    @Let[wrong : Option[Pid[string, i64]], @WhereIs["conflict"]],
+    @Assert[@IsNone[wrong], "类型不匹配的查找返回 None"],
+    @Let[_, @Kill[pa]],
+    @Let[_, @Kill[pb]],
+
+    @Let[pc, @Spawn[blocking, 1]],
+    @Assert[EqualBool[@Register["temp", pc], true], "登记待注销的名字"],
+    @Assert[EqualBool[@Unregister["temp"], true], "注销名字"],
+    @Let[gone : Option[Pid[i64, i64]], @WhereIs["temp"]],
+    @Assert[@IsNone[gone], "注销后查找返回 None"],
+    @Let[_, @Kill[pc]]
+  ]]

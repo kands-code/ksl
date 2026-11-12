@@ -1,0 +1,10 @@
+# 整数格式: 宽度, 零填充, 进制与对齐.
+@Let[x, 42];
+@Assert[EqualString[f"x={x:05}", "x=00042"], "整数零填充宽度"];
+@Assert[EqualString[f"{255:x}", "ff"], "十六进制小写"];
+@Assert[EqualString[f"{255:#x}", "0xff"], "十六进制带前缀"];
+@Assert[EqualString[f"{255:#06x}", "0x00ff"], "十六进制带前缀零填充"];
+@Assert[EqualString[f"{255:#010x}", "0x000000ff"], "十六进制宽度计入前缀"];
+@Assert[EqualString[f"{255:#X}", "0xFF"], "大写十六进制只改数字大小写"];
+@Assert[EqualString[f"{-255:#x}", "-0xff"], "进制格式保留负号"];
+@Assert[EqualString[f"{42:<08}", "00000042"], "0 标志优先于左对齐"];

@@ -1,0 +1,21 @@
+# 值显示: 函数与 Handler 签名, 数值后缀, 字符串与字符引号.
+@Let[anon, @Fn[[x : i64] : i64, x]];
+@Def[named, [x : i64] : i64, x];
+@Let[handler, @Handler[[self : Pid[i64, i64]] : i64, 0]];
+@Assert[EqualString[f"{anon}", "Fn[[i64] : i64]"], "匿名闭包显示签名"];
+@Assert[EqualString[f"{named}", "named : Fn[[i64] : i64]"], "具名函数显示签名"];
+@Assert[EqualString[f"{AddI64}", "AddI64 : Fn[[i64, i64] : i64]"], "内置函数显示签名"];
+@Assert[EqualString[f"{handler}", "Handler[[Pid[i64, i64]] : i64]"], "Handler 显示签名"];
+
+@Let[u, 255u];
+@Assert[EqualString[f"{u}", "255u"], "u8 保留类型后缀"];
+@Assert[EqualString[f"{u:>6}", "  255u"], "u8 后缀计入宽度"];
+@Assert[EqualString[f"{u:#06x}", "0x0ffu"], "u8 后缀计入宽度且零填充在前缀之后"];
+@Let[big, 255U];
+@Assert[EqualString[f"{big:>6}", "  255U"], "u64 后缀计入宽度"];
+
+@Let[s, "hi"];
+@Let[ch, 'a'];
+@Assert[EqualString[f"{s}", "hi"], "字符串默认省略引号"];
+@Assert[EqualString[f"{s:?}", "\"hi\""], "字符串显式引号"];
+@Assert[EqualString[f"{ch:?}", "'a'"], "字符显式引号"];

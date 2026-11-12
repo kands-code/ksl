@@ -1,0 +1,28 @@
+# 名字登记: 查找, 投递与目标终止后的清理.
+@Let[blocking, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+  @Match[@Receive[0u, Option/None[]], { (/Some[m], m), (/None[], n) }]]];
+@Let[waits_one, @Handler[[self : Pid[string, i64], s : string] : i64,
+  @Match[@Receive[0u, Option/None[]], { (/Some[_], 1), (/None[], 1) }]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[p, @Spawn[blocking, 7]],
+    @Assert[EqualBool[@Register["worker", p], true], "登记名字"],
+    @Let[found : Option[Pid[i64, i64]], @WhereIs["worker"]],
+    @Assert[@IsSome[found], "按名字查找"],
+    @Let[target, @OptionGet[found, @Panic["名字未登记"]]],
+    @Assert[EqualBool[@Send[target, 0u, 7], true], "向查找结果投递"],
+    @Assert[EqualI64[@ResultGet[@Join[target], -1], 7], "查找结果可 Join 取值"],
+
+    @Let[p1, @Spawn[blocking, 1]],
+    @Assert[EqualBool[@Register["job", p1], true], "登记待接管的名字"],
+    @Assert[EqualBool[@Kill[p1], true], "终止待接管的目标"],
+    @Let[_, @Join[p1]],
+    @Let[after : Option[Pid[i64, i64]], @WhereIs["job"]],
+    @Assert[@IsNone[after], "目标终止后清理名字"],
+    @Let[p2, @Spawn[waits_one, "x"]],
+    @Assert[EqualBool[@Register["job", p2], true], "不同类型可接管名字"],
+    @Let[taken : Option[Pid[string, i64]], @WhereIs["job"]],
+    @Assert[@IsSome[taken], "接管后可按名字查找"],
+    @Let[_, @Kill[p2]]
+  ]]

@@ -1,0 +1,46 @@
+# 尾写: 套接字在写入后不再被引用, 写入仍应完成.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[_], @Panic["TcpListen 失败"])
+    }]],
+    @Let[port, TcpLocalPort[listener]],
+    @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+      @Match[TcpAccept[listener, 5000U], {
+        (/Ok[socket], @Match[SocketWriteLine[socket, "ok", 5000U], {
+          (/Ok[_], nil),
+          (/Err[_], @Panic["服务端尾写失败"])
+        }]),
+        (/Err[_], @Panic["TcpAccept 失败"])
+      }]]],
+    @Let[server_pid, @Spawn[server, listener]],
+    @Let[client, @Handler[[self : Pid[nil, string], port : u64] : string,
+      @Block[
+        @Let[socket, @Match[TcpConnect["127.0.0.1", port, 5000U], {
+          (/Ok[socket], socket),
+          (/Err[_], @Panic["TcpConnect 失败"])
+        }]],
+        @Let[line, @Match[SocketReadLine[socket, 1024U, 5000U], {
+          (/Ok[line], line),
+          (/Err[_], @Panic["SocketReadLine 失败"])
+        }]],
+        @Let[text, @Match[line, {
+          (/Some[text], text),
+          (/None[], @Panic["客户端读到 EOF"])
+        }]],
+        SocketClose[socket],
+        text
+      ]]],
+    @Let[client_pid, @Spawn[client, port]],
+    @Let[text, @Match[@Join[client_pid], {
+      (/Ok[text], text),
+      (/Err[_], @Panic["客户端 Join 失败"])
+    }]],
+    @Assert[EqualString[text, "ok"], "尾写应送达客户端"],
+    @Let[_, @Match[@Join[server_pid], {
+      (/Ok[_], nil),
+      (/Err[_], @Panic["服务端 Join 失败"])
+    }]],
+    TcpCloseListener[listener]
+  ]]

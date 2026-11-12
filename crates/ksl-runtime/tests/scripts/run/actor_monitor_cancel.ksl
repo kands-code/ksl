@@ -1,0 +1,49 @@
+# 取消监视与登记权限.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    # 取消监视后不再收到通知, 重复取消返回 false.
+    @Let[patient, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], { (/Some[x], x), (/None[], 7) }]]],
+    @Let[unmonitoring, @Handler[[self : Pid[i64, Pair[u64, ExitReason], bool]] : bool,
+      @Block[
+        @Let[child, @Spawn[patient]],
+        @Let[id, @Match[@Monitor[child], {
+          (/Some[id], id),
+          (/None[], @Panic["监视失败"])
+        }]],
+        @Let[removed, @Unmonitor[id]],
+        @Let[again, @Unmonitor[id]],
+        @Let[_, @Kill[child]],
+        @Match[@Receive[1u, Option/Some[30U]], {
+          (/Some[_], false),
+          (/None[], And[removed, Not[again]])
+        }]
+      ]]],
+    @Let[s5, @Spawn[unmonitoring]],
+    @Assert[
+      @Match[@Join[s5], { (/Ok[v], v), (/Err[_], false) }],
+      "取消监视后不再收到通知"
+    ],
+
+    # 非登记者不能取消别人登记的监视.
+    @Let[target, @Handler[[self : Pid[i64, i64]] : i64, 0]],
+    @Let[thief, @Handler[[self : Pid[i64, bool], id : u64] : bool, @Unmonitor[id]]],
+    @Let[guarded, @Handler[
+      [self : Pid[Pair[u64, ExitReason], bool], t : Pid[i64, i64]] : bool,
+      @Block[
+        @Let[id, @Match[@Monitor[t], { (/Some[id], id), (/None[], @Panic["监视失败"]) }]],
+        @Let[th, @Spawn[thief, id]],
+        @Let[stolen, @Match[@Join[th], { (/Ok[v], v), (/Err[_], true) }]],
+        @Let[_, @Kill[t]],
+        @Match[@Receive[0u, Option/Some[20U]], {
+          (/Some[_], Not[stolen]),
+          (/None[], false)
+        }]
+      ]]],
+    @Let[t, @Spawn[target]],
+    @Let[s6, @Spawn[guarded, t]],
+    @Assert[
+      @Match[@Join[s6], { (/Ok[v], v), (/Err[_], false) }],
+      "非登记者不能取消监视"
+    ]
+  ]]

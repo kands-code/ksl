@@ -1,0 +1,57 @@
+# 取消挂起的读取后, 共享同一套接字的其他读取仍应继续.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[_], @Panic["TcpListen 失败"])
+    }]],
+    @Let[port, TcpLocalPort[listener]],
+    @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+      @Match[TcpAccept[listener, 5000U], {
+        (/Ok[socket], @Block[
+          @Sleep[200U],
+          @Let[written, SocketWriteLine[socket, "first", 5000U]],
+          @Assert[@IsOk[written], "服务端写入应成功"],
+          @Sleep[100U],
+          SocketClose[socket],
+          nil
+        ]),
+        (/Err[_], @Panic["TcpAccept 失败"])
+      }]]],
+    @Let[server_pid, @Spawn[server, listener]],
+    @Let[socket, @Match[TcpConnect["127.0.0.1", port, 5000U], {
+      (/Ok[socket], socket),
+      (/Err[_], @Panic["TcpConnect 失败"])
+    }]],
+    @Let[reader, @Handler[
+      [self : Pid[nil, Option[string]], socket : Socket] : Option[string],
+      @Match[SocketReadLine[socket, 1024U, 5000U], {
+        (/Ok[line], line),
+        (/Err[_], @Panic["读取者失败"])
+      }]]],
+    @Let[reader_pid, @Spawn[reader, socket]],
+    @Sleep[100U],
+    @Assert[@Kill[reader_pid], "读取者应处于等待"],
+    @Let[_, @Match[@Join[reader_pid], {
+      (/Ok[_], @Panic["读取者不应正常结束"]),
+      (/Err[reason], @Match[reason, {
+        (/Killed[], nil),
+        (_, @Panic["读取者退出原因不是 Killed"])
+      }])
+    }]],
+    @Let[line, @Match[SocketReadLine[socket, 1024U, 5000U], {
+      (/Ok[line], line),
+      (/Err[_], @Panic["取消读取后读取失败"])
+    }]],
+    @Let[text, @Match[line, {
+      (/Some[text], text),
+      (/None[], @Panic["取消读取后读到 EOF"])
+    }]],
+    @Assert[EqualString[text, "first"], "取消读取后套接字仍可读"],
+    SocketClose[socket],
+    @Let[_, @Match[@Join[server_pid], {
+      (/Ok[_], nil),
+      (/Err[_], @Panic["服务端 Join 失败"])
+    }]],
+    TcpCloseListener[listener]
+  ]]

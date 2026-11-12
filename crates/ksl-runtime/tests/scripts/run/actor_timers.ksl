@@ -1,0 +1,18 @@
+# 定时消息的投递与目标终止后的返回值.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[waiting, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], { (/Some[n], n), (/None[], 0) }]]],
+
+    @Let[p, @Spawn[waiting]],
+    @Let[_, @SetTimer[p, 0u, 7, 10U]],
+    @Assert[EqualI64[@ResultGet[@Join[p], 0], 7], "定时消息延迟投递"],
+
+    @Let[finished, @Handler[[self : Pid[i64, i64]] : i64, 1]],
+    @Let[q, @Spawn[finished]],
+    @Let[_, @Join[q]],
+    @Assert[
+      @Match[@SetTimer[q, 0u, 2, 10U], { (/Some[_], false), (/None[], true) }],
+      "目标已终止时返回 None"
+    ]
+  ]]

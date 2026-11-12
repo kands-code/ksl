@@ -1,0 +1,48 @@
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[_], @Panic["TcpListen 失败"])
+    }]],
+    @Let[port, TcpLocalPort[listener]],
+    @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+      @Block[
+        @Match[TcpAccept[listener, 5000U], {
+          (/Ok[socket], @Block[
+            @Match[SocketWriteAll[socket, EncodeUtf8["hello"], 5000U], {
+              (/Ok[_], nil),
+              (/Err[_], @Panic["SocketWriteAll 失败"])
+            }],
+            SocketClose[socket],
+            nil
+          ]),
+          (/Err[_], @Panic["TcpAccept 失败"])
+        }]
+      ]]],
+    @Let[client, @Handler[[self : Pid[nil, bool], port : u64] : bool,
+      @Block[
+        @Match[TcpConnect["127.0.0.1", port, 5000U], {
+          (/Ok[socket], @Block[
+            @Let[result, @Match[SocketReadAll[socket, 2U, 5000U], {
+              (/Ok[_], false),
+              (/Err[error], @Match[error, {
+                (/TooLarge[], true),
+                (_, false)
+              }])
+            }]],
+            SocketClose[socket],
+            result
+          ]),
+          (/Err[_], @Panic["TcpConnect 失败"])
+        }]
+      ]]],
+    @Let[server_pid, @Spawn[server, listener]],
+    @Let[client_pid, @Spawn[client, port]],
+    @Let[_, @Join[server_pid]],
+    @Match[@Join[client_pid], {
+      (/Ok[too_large], @Assert[too_large, "读全量超过上限应报 TooLarge"]),
+      (/Err[_], @Panic["客户端 Join 失败"])
+    }],
+    TcpCloseListener[listener]
+  ]]

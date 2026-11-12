@@ -1,0 +1,20 @@
+# 条件必须是表达式, 字面量 true 与 false 不可用作条件.
+@Let[hit, EqualI64[1, 1]];
+@Let[miss, EqualI64[1, 0]];
+
+@Assert[EqualI64[@Which[{(hit, 10), (hit, 20)}, 30], 10], "多个分支命中时取第一个"];
+@Assert[EqualI64[@Which[{(miss, 10), (hit, 20)}, 30], 20], "命中第二分支"];
+@Assert[EqualI64[@Which[{(miss, 10), (miss, 20)}, 30], 30], "全部不命中时取 fallback"];
+@Assert[EqualI64[@Which[{}, 30], 30], "空分支表取 fallback"];
+@Assert[
+  EqualI64[@Which[{(hit, 1), (@Panic["后续条件不应求值"], 2)}, 0], 1],
+  "命中后不再求值后续条件"
+];
+@Assert[
+  EqualI64[@Which[{(hit, 1), (miss, @Panic["未命中分支不应求值"])}, 0], 1],
+  "只求值命中分支的值"
+];
+@Assert[
+  EqualI64[@Which[{(hit, 1)}, @Panic["命中时不求值 fallback"]], 1],
+  "命中时不求值 fallback"
+];

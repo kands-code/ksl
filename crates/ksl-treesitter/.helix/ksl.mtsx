@@ -1,0 +1,168 @@
+// require MT >= 2.26.9
+//
+// ksl 的 MT 管理器语法高亮.
+//
+// 特殊形式, 容器操作, 内置函数与内置类型名单由 `scripts/gen-mtsx.sh` 生成,
+// 不要手工修改 BEGIN/END 之间的内容. 原始字符串的终点复用起点捕获的
+// 井号数量, 依赖 MT 2.26.9 的 export/var 功能.
+{
+    name: ["ksl", ".ksl"]
+    comment: {startsWith: "#"}
+    bracketPairs: ["{}", "[]", "()"]
+    styles: [
+        // `/` 是类型限定名的分隔符; MT 无独立内置风格, 沿用 operator.
+        "delimiter" > "operator"
+    ]
+    contains: [
+        // 原始字符串: r"...", r#"..."#, r##"..."## 等.
+        {
+            start: {
+                match: /r(#*)"/
+                export: 1 => "rawHashes"
+                0: "string"
+            }
+            end: {match: /"/ + var("rawHashes"), 0: "string"}
+            style: "string"
+        }
+
+        // 格式化字符串: 整体按字符串处理, 插值内容单独着色.
+        // 插值匹配器从 `{` 开始并消费到 `}`, 避免其中的引号提前结束字符串.
+        {
+            start: {match: /f"/}
+            end: {match: /"/}
+            style: "string"
+            contains: [
+                {match: /\\u\{[0-9A-Fa-f]+\}/, 0: "strEscape"}
+                {match: /\\./, 0: "strEscape"}
+                {match: /\{\{|\}\}/, 0: "strEscape"}
+                {match: /\{([^{}]*)\}/, 1: "variable"}
+            ]
+        }
+
+        // 普通字符串与字符字面量.
+        {
+            start: {match: /"/}
+            end: {match: /"/}
+            style: "string"
+            contains: [
+                {match: /\\u\{[0-9A-Fa-f]+\}/, 0: "strEscape"}
+                {match: /\\./, 0: "strEscape"}
+            ]
+        }
+        {
+            start: {match: /'/}
+            end: {match: /'/}
+            style: "string"
+            contains: [
+                {match: /\\u\{[0-9A-Fa-f]+\}/, 0: "strEscape"}
+                {match: /\\./, 0: "strEscape"}
+            ]
+        }
+
+        // 数字: 二进制, 十进制, 十六进制, 浮点与指数; u8/u64 后缀共用同一风格.
+        {
+            number: "2|10|16|F|E"
+            iSuffixes: "u"
+            style: "number"
+        }
+
+        // 声明名: @Data 的类型名与 @Def 的函数名.
+        {match: /(@)\s*(Data)\s*(\[\s*)([\p{L}_][\p{L}\p{N}_]*)/, 1: "operator", 2: "keyword", 4: "type"}
+        {match: /(@)\s*(Def)\s*(\[\s*)([\p{L}_][\p{L}\p{N}_]*)/, 1: "operator", 2: "keyword", 4: "label"}
+
+        // 字面量关键字.
+        {match: keywordsToRegex("true false nil"), 0: "constant"}
+
+        // 核心, Actor 与命名注册特殊形式.
+        {match: keywordsToRegex(
+            // BEGIN special forms
+            "Assert Block CancelTimer Continue Data Def Exit Export"
+            "Fix Fn Halt Handler If Join Kill Let"
+            "Link Main Match Monitor Panic PidSerial Receive Register"
+            "Send SetTimer Sleep Spawn SpawnDetached Todo Unmonitor Unreachable"
+            "Unregister Use WhereIs Which"
+            // END special forms
+        ), 0: "keyword"}
+
+        // 容器构造器与操作族.
+        {match: keywordsToRegex(
+            // BEGIN operations
+            "Dict DictEntries DictFilter DictFromEntries DictGet DictHas DictKeys DictLength"
+            "DictLookup DictMerge DictPut DictRemove DictUpdate DictValues Fst IsDictEmpty"
+            "IsErr IsListEmpty IsNone IsOk IsSetEmpty IsSome ListAll ListAny"
+            "ListAppend ListChunk ListConcatenate ListDrop ListDropWhile ListFilter ListFlatten ListFold"
+            "ListGet ListHead ListLength ListMap ListMapIndexed ListPrefixFold ListPrepend ListRepeat"
+            "ListReverse ListRiffle ListTail ListTake ListTakeWhile ListUpdate ListWindow ListZip"
+            "ListZipWith OptionAndThen OptionGet OptionMap ResultAndThen ResultGet ResultMap ResultOrElse"
+            "Set SetDifference SetFilter SetFromList SetHas SetInsert SetIntersect SetItems"
+            "SetLength SetRemove SetUnion Snd"
+            // END operations
+        ), 0: "keyword2"}
+
+        // 内置函数.
+        {match: keywordsToRegex(
+            // BEGIN builtins
+            "AbsF64 AbsI64 AddDay AddF64 AddHour AddI64 AddMillisecond AddMinute"
+            "AddMonth AddSecond AddU64 AddU8 AddWeek AddYear And AppendFile"
+            "AppendFileBytes ArcCos ArcCosh ArcSin ArcSinh ArcTan ArcTan2 ArcTanh"
+            "Args BitAndI64 BitAndU64 BitAndU8 BitOrI64 BitOrU64 BitOrU8 BitReverseI64"
+            "BitReverseU64 BitReverseU8 BitXorI64 BitXorU64 BitXorU8 Ceiling CharToU64 CharsToString"
+            "Close ClosedFile CommandOutputStatus CommandOutputStderr CommandOutputStdout CopyFile Cos Cosh"
+            "CreateDirectory CreateDirectoryAll DateDay DateMonth DateTimeFromParts DateTimeInZone DateTimeToEpochMillis DateTimeToString"
+            "DateWeekday DateYear DecodeUtf8 DivideF64 DivideI64 DivideU64 DivideU8 EmptyRegexMatch"
+            "EncodeUtf8 EnterRawMode EpochMillisToDateTime EqualBool EqualChar EqualDateTime EqualF64 EqualI64"
+            "EqualString EqualU64 EqualU8 ExitRawMode Floor Flush GetCurrentDirectory GetEnv"
+            "GreaterDateTime GreaterF64 GreaterI64 GreaterOrEqualDateTime GreaterOrEqualF64 GreaterOrEqualI64 GreaterOrEqualU64 GreaterOrEqualU8"
+            "GreaterU64 GreaterU8 I64ToF64 I64ToU64 I64ToU8 IsAlphanumeric IsAsciiDigit IsDirectory"
+            "IsFile IsLetter IsLowercase IsPathExists IsUppercase IsWhitespace JoinPath LessDateTime"
+            "LessF64 LessI64 LessOrEqualDateTime LessOrEqualF64 LessOrEqualI64 LessOrEqualU64 LessOrEqualU8 LessU64"
+            "LessU8 ListDirectory ModuloI64 ModuloU64 ModuloU8 MulF64 MulI64 MulU64"
+            "MulU8 Not Now NowUtc OpenAppend OpenRead OpenWrite Or"
+            "ParseDateTime ParseF64 ParseI64 ParseU64 Power Print PrintError QuotientI64"
+            "ReadChunk ReadFile ReadFileBytes ReadKey ReadLine ReadLineFrom RegexCaptureNames RegexCompile"
+            "RegexFind RegexFindAll RegexIsMatch RegexMatchEnd RegexMatchGroup RegexMatchNamedGroup RegexMatchStart RegexMatchText"
+            "RegexReplace RegexReplaceAll RegexSplit RemainderI64 RemoveDirectory RemoveFile RenamePath Round"
+            "RunCommand ShiftLeftI64 ShiftLeftU64 ShiftLeftU8 ShiftRightI64 ShiftRightU64 ShiftRightU8 Sin"
+            "Sinh SocketClose SocketIsClosed SocketPeer SocketRead SocketReadAll SocketReadExact SocketReadLine"
+            "SocketShutdownWrite SocketWrite SocketWriteAll SocketWriteLine Sqrt StringContains StringEndsWith StringJoin"
+            "StringLength StringLines StringLowercase StringSlice StringSplit StringStartsWith StringToChars StringTrim"
+            "StringTrimEnd StringTrimStart StringUppercase StringWords SubDay SubF64 SubHour SubI64"
+            "SubMillisecond SubMinute SubMonth SubSecond SubU64 SubU8 SubWeek SubYear"
+            "Tan Tanh TcpAccept TcpCloseListener TcpConnect TcpListen TcpLocalPort TimeHour"
+            "TimeMillisecond TimeMinute TimeSecond TimeZoneName TimeZoneOffsetMinutes Truncate U64ToChar U64ToF64"
+            "U64ToI64 U64ToU8 U8ToI64 U8ToU64 WriteBytes WriteFile WriteFileBytes WriteString"
+            // END builtins
+        ), 0: "label"}
+
+        // 内置类型.
+        {match: keywordsToRegex(
+            // BEGIN types
+            "CommandError CommandInput CommandOption CommandOutput CommandStatus DateTime Dict ExitReason"
+            "File FileError Handler InputError KeyEvent List NumberParseError Option"
+            "Pair Pid Regex RegexError RegexMatch Result Set Socket"
+            "SocketError TcpListener TimeError Utf8Error bool char f64 i64"
+            "string u64 u8"
+            // END types
+        ), 0: "type"
+        }
+
+        // 类型按上下文识别, 不按首字母大写猜测: 变量名可以是 A, 类型也可能小写.
+        {match: /(:)\s*([\p{L}_][\p{L}\p{N}_]*)/, 1: "operator", 2: "type"}
+        {match: /(\^)\s*\(\s*([\p{L}_][\p{L}\p{N}_]*)\s*,\s*([\p{L}_][\p{L}\p{N}_]*)\s*\)/, 1: "operator", 2: "type", 3: "type"}
+        {match: /(\^)\s*([\p{L}_][\p{L}\p{N}_]*)/, 1: "operator", 2: "type"}
+        {match: /([\p{L}_][\p{L}\p{N}_]*)(?=\s*\/)/, 1: "type"}
+
+        // 调用名: 标识符后紧跟 `[`, 排除已经匹配的特殊形式, 操作与内置函数.
+        {match: /([\p{L}_][\p{L}\p{N}_]*)(?=\s*\[)/, 1: "label"}
+
+        // 抛弃记号 `_`.
+        {match: /\b_+\b/, 0: "comment"}
+
+        // `@` 与 `^` 是前缀符号; `/` 是类型限定名的分隔符.
+        {match: /[@^+\-]/, 0: "operator"}
+        {match: /[\/,;:]/, 0: "delimiter"}
+
+        // 变量兜底.
+        {match: /[\p{L}_][\p{L}\p{N}_]*/, 0: "variable"}
+    ]
+}

@@ -1,0 +1,25 @@
+[workspace]
+members = [
+  "crates/ksl-base",
+  "crates/ksl-catalog",
+  "crates/ksl-frontend",
+  "crates/ksl-runtime",
+  "crates/ksl-plugin",
+  "crates/ksl-cli",
+  "crates/ksl-macros",
+  "crates/ksl-treesitter",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.100.0"
+license = "AGPL-3.0-or-later"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

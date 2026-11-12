@@ -1,0 +1,15 @@
+# 取消定时消息与重复取消.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[waiting, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], { (/Some[n], n), (/None[], 0) }]]],
+    @Let[r, @Spawn[waiting]],
+    @Let[timer, @SetTimer[r, 0u, 7, 20U]],
+    @Let[cancelled, @Match[timer, { (/Some[id], @CancelTimer[id]), (/None[], false) }]],
+    @Let[again, @Match[timer, { (/Some[id], @CancelTimer[id]), (/None[], false) }]],
+    @Assert[EqualBool[cancelled, true], "取消定时消息"],
+    @Assert[EqualBool[again, false], "重复取消失败"],
+    @Let[_, @Sleep[30U]],
+    @Let[_, @Send[r, 0u, 5]],
+    @Assert[EqualI64[@ResultGet[@Join[r], 0], 5], "取消后不投递"]
+  ]]

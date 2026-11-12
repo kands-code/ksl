@@ -1,0 +1,42 @@
+@Assert[
+  EqualString[StringJoin[@ListRiffle[StringSplit["a,b,,c", ","], "|", 1U]], "a|b||c"],
+  "按分隔符切分"
+];
+@Assert[EqualString[StringJoin[StringSplit["abc", ""]], "abc"], "空分隔符返回原串"];
+@Assert[
+  EqualString[StringJoin[@ListRiffle[StringLines["a\r\nb\n"], "/", 1U]], "a/b"],
+  "按行切分"
+];
+@Assert[
+  EqualString[StringJoin[@ListRiffle[StringWords["  a\tb c "], "-", 1U]], "a-b-c"],
+  "按空白切词"
+];
+@Assert[EqualU64[@ListLength[StringLines[""]], 0U], "空串分行"];
+@Assert[EqualU64[@ListLength[StringLines["\n"]], 1U], "单个换行的分行"];
+@Assert[EqualString[StringJoin[StringLines["a\r"]], "a\r"], "单独的 CR 不是换行"];
+@Assert[EqualU64[@ListLength[StringLines["\r"]], 1U], "单独的 CR 保留为一行"];
+
+@Assert[EqualString[StringTrim["  x  "], "x"], "去除两端空白"];
+@Assert[EqualString[StringTrimStart["  x  "], "x  "], "去除开头空白"];
+@Assert[EqualString[StringTrimEnd["  x  "], "  x"], "去除结尾空白"];
+@Assert[EqualString[StringTrim[" \t x \n"], "x"], "多种空白一并去除"];
+
+@Assert[EqualString[StringUppercase["Straße"], "STRASSE"], "大写转换"];
+@Assert[EqualString[StringLowercase["ÄÖÜ"], "äöü"], "小写转换"];
+@Assert[EqualBool[StringStartsWith["hello", "he"], true], "前缀判定"];
+@Assert[EqualBool[StringEndsWith["hello", "lo"], true], "后缀判定"];
+@Assert[EqualBool[StringContains["hello", "ell"], true], "包含判定"];
+@Assert[EqualBool[StringContains["hello", "xyz"], false], "不含子串"];
+
+@Assert[EqualString[StringJoin[{"a", "b", "c"}], "abc"], "字符串拼接"];
+@Assert[EqualString[StringSlice["abc", 1U, 3U], "bc"], "按字符取子串"];
+@Assert[EqualString[StringSlice["abc", 0U, 99U], "abc"], "终点越界截到串尾"];
+@Assert[EqualString[StringSlice["abc", 5U, 9U], ""], "起点越界取空串"];
+@Assert[EqualString[StringSlice["abc", 2U, 1U], ""], "起点不小于终点取空串"];
+@Assert[EqualString[StringSlice["héllo", 1U, 3U], "él"], "按字符而非字节切分"];
+@Assert[EqualString[CharsToString[StringToChars["abc"]], "abc"], "字符往返"];
+@Assert[EqualU64[StringLength["hé😀"], 3U], "按 Unicode 标量计长"];
+@Assert[
+  EqualString[@Match[DecodeUtf8[EncodeUtf8["hé"]], { (/Ok[s], s), (/Err[_], "") }], "hé"],
+  "UTF-8 往返"
+];

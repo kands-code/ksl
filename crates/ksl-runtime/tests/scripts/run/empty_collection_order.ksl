@@ -1,0 +1,6 @@
+@Let[c, true];
+@Let[a, @If[c, @Set[], @Set[1]]];
+@Let[b, @If[c, @Set[1], @Set[]]];
+@Let[_, @DictPut[@Dict[], "a", 1]];
+@Let[_, @SetHas[@Set[], 1]];
+@Let[d : Dict[string, i64], @Dict[]];

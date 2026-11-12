@@ -1,0 +1,45 @@
+# 归属关系: 父退出终止子 Actor, SpawnDetached 子 Actor 独立存活.
+@Main[[self : Pid[Pid[i64, i64], nil]] : nil,
+  @Block[
+    @Let[child, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], { (/Some[x], x), (/None[], 0) }]]],
+    @Let[parent, @Handler[
+      [self : Pid[nil, i64], root : Pid[Pid[i64, i64], nil]] : i64,
+      @Block[
+        @Let[c, @Spawn[child]],
+        @Let[_, @Send[root, 0u, c]],
+        0
+      ]]],
+    @Let[runner, @Spawn[parent, self]],
+    @Let[spawned, @Match[@Receive[0u, Option/None[]], {
+      (/Some[c], c),
+      (/None[], @Panic["未收到子 Actor 的 Pid"])
+    }]],
+    @Let[_, @Join[runner]],
+    @Assert[
+      @Match[@Join[spawned], {
+        (/Ok[_], false),
+        (/Err[e], @Match[e, { (/Killed[], true), (_, false) }])
+      }],
+      "父退出终止子 Actor"
+    ],
+
+    @Let[survivor, @Handler[[self : Pid[i64, i64]] : i64, @Block[@Sleep[10U], 7]]],
+    @Let[detaching, @Handler[
+      [self : Pid[nil, i64], root : Pid[Pid[i64, i64], nil]] : i64,
+      @Block[
+        @Let[c, @SpawnDetached[survivor]],
+        @Let[_, @Send[root, 0u, c]],
+        0
+      ]]],
+    @Let[runner2, @Spawn[detaching, self]],
+    @Let[detached, @Match[@Receive[0u, Option/None[]], {
+      (/Some[c], c),
+      (/None[], @Panic["未收到子 Actor 的 Pid"])
+    }]],
+    @Let[_, @Join[runner2]],
+    @Assert[
+      EqualI64[@ResultGet[@Join[detached], 0], 7],
+      "Detached 子 Actor 不受父退出影响"
+    ]
+  ]]

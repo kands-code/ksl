@@ -1,0 +1,13 @@
+[package]
+name = "ksl-plugin"
+description = "ksl 插件 ABI 与导出宏"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ksl-macros = { version = "0.1.0", path = "../ksl-macros" }
+
+[lints]
+workspace = true

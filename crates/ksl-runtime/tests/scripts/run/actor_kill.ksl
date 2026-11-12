@@ -1,0 +1,59 @@
+# 强制终止: 返回值, Join 退出原因与父子终止.
+@Data[ChildNotice, {Child[Pid[nil, nil]]}];
+
+@Main[[self : Pid[ChildNotice, nil]] : nil,
+  @Block[
+    @Let[waiting, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], { (/Some[x], x), (/None[], 0) }]]],
+    @Let[p, @Spawn[waiting]],
+    @Assert[EqualBool[@Kill[p], true], "Kill 存活目标返回 true"],
+    @Assert[
+      @Match[@Join[p], {
+        (/Ok[_], false),
+        (/Err[e], @Match[e, { (/Killed[], true), (_, false) }])
+      }],
+      "等待中的 Actor 被 Kill 后 Join 返回 Killed"
+    ],
+    @Assert[EqualBool[@Kill[p], false], "Kill 已终止目标返回 false"],
+
+    @Let[unstarted, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], { (/Some[x], x), (/None[], 99) }]]],
+    @Let[q, @Spawn[unstarted]],
+    @Let[_, @Kill[q]],
+    @Assert[
+      @Match[@Join[q], {
+        (/Ok[_], false),
+        (/Err[e], @Match[e, { (/Killed[], true), (_, false) }])
+      }],
+      "未启动的 Actor 被 Kill 后 Join 返回 Killed"
+    ],
+    @Let[tattler, @Handler[
+      [self : Pid[nil, nil], parent : Pid[nil, nil], out : Pid[ChildNotice, nil]] : nil,
+      @Block[
+        @Let[_, @Receive[0u, Option/None[]]],
+        @Let[_, @Kill[parent]],
+        nil
+      ]]],
+    @Let[parent, @Handler[
+      [self : Pid[nil, nil], out : Pid[ChildNotice, nil]] : nil,
+      @Block[
+        @Let[c, @Spawn[tattler, self, out]],
+        @Let[_, @Send[out, 0u, ChildNotice/Child[c]]],
+        @Let[_, @Send[c, 0u, nil]],
+        @Let[_, @Receive[0u, Option/None[]]],
+        nil
+      ]]],
+    @Let[p, @Spawn[parent, self]],
+    @Let[_, @Join[p]],
+    @Let[c, @Match[@Receive[0u, Option/Some[1000U]], {
+      (/Some[m], @Match[m, { (/Child[c], c) }]),
+      (/None[], @Exit[1u])
+    }]],
+    @Assert[
+      @Match[@Join[c], {
+        (/Ok[_], false),
+        (/Err[e], @Match[e, { (/Killed[], true), (_, false) }])
+      }],
+      "杀死父 Actor 后子 Actor 应终止"
+    ]
+  ]]

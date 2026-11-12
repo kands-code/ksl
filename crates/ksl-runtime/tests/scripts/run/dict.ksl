@@ -1,0 +1,58 @@
+@Def[stringListEq, [xs : List[string], ys : List[string]] : bool,
+  @Which[
+    {(@IsListEmpty[xs], @IsListEmpty[ys]),
+     (@IsListEmpty[ys], false)},
+    And[
+      EqualString[@ListHead[xs], @ListHead[ys]],
+      stringListEq[@ListTail[xs], @ListTail[ys]]
+    ]
+  ]
+];
+
+@Let[empty : Dict[string, i64], @Dict[]];
+@Assert[EqualU64[@DictLength[empty], 0U], "空字典长度"];
+@Assert[@IsDictEmpty[empty], "空字典判定"];
+
+@Let[d, @Dict[("a", 1), ("b", 2)]];
+@Let[one : Dict[string, i64], @Dict[("a", 1)]];
+@Let[d1, @DictPut[d, "c", 3]];
+@Assert[Not[@IsDictEmpty[d1]], "非空字典判定"];
+@Assert[EqualI64[@OptionGet[@DictLookup[d1, "b"], 0], 2], "字典查找"];
+@Assert[EqualU64[@DictLength[d1], 3U], "字典长度"];
+@Assert[EqualBool[@DictHas[d1, "c"], true], "字典含键"];
+@Assert[EqualBool[@DictHas[d1, "a"], true], "写入不删除原有键"];
+
+@Assert[
+  stringListEq[@DictKeys[@DictFromEntries[@DictEntries[d1]]], {"a", "b", "c"}],
+  "字典条目还原"
+];
+@Assert[
+  stringListEq[
+    @DictKeys[@DictFilter[d, @Fn[[k : string, v : i64] : bool, GreaterI64[v, 1]]]],
+    {"b"}
+  ],
+  "字典按值过滤"
+];
+@Assert[
+  EqualI64[AddI64[@DictGet[one, "a", DivideI64[1, 0]], @DictGet[one, "b", 99]], 100],
+  "字典缺省值不参与求值"
+];
+@Assert[
+  stringListEq[
+    @ListConcatenate[@DictKeys[d], @ListMap[@DictValues[d], @Fn[[n : i64] : string, f"{n}"]]],
+    {"a", "b", "1", "2"}
+  ],
+  "字典键与值的顺序"
+];
+
+@Let[merged, @DictMerge[@Dict[("x", 1), ("y", 2)], @Dict[("y", 8), ("z", 9)]]];
+@Assert[EqualI64[@OptionGet[@DictLookup[merged, "y"], 0], 8], "字典合并覆盖同名键"];
+
+@Assert[EqualBool[@DictHas[d, "a"], true], "字典删除前含键"];
+@Assert[EqualBool[@DictHas[@DictRemove[d, "a"], "a"], false], "字典删除键"];
+@Assert[EqualBool[@DictHas[d, "a"], true], "删除不改变原字典"];
+
+@Let[updated, @DictUpdate[one, "a", @Fn[[n : i64] : i64, AddI64[n, 1]], DivideI64[1, 0]]];
+@Let[added, @DictUpdate[updated, "b", @Fn[[n : i64] : i64, AddI64[n, 1]], 10]];
+@Assert[EqualI64[@OptionGet[@DictLookup[added, "a"], 0], 2], "字典更新已有键"];
+@Assert[EqualI64[@OptionGet[@DictLookup[added, "b"], 0], 10], "字典更新新增键"];

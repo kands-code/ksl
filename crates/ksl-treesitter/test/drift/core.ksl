@@ -1,0 +1,48 @@
+# 漂移测试本地语料: 字面量, 调用, 函数, Data 与模块声明.
+
+@Let[i64s, {0, 0xFF, -12, 9223372036854775807, -9223372036854775808, +12, 0b101}];
+@Let[u8s, {255u, 0xffu, 0b101u}];
+@Let[u64s, {0U, 18446744073709551615U, 0xffU, 0b101U}];
+@Let[floats, {3.5, +3.5, -2.5e-2, 1e3, 1E3}];
+@Let[texts, {"a\nb", r"a\nb", r##"c"d"##, f"x={1} {2:05} {{c}}"}];
+@Let[escapes, {"\t\r\0\\\"", f"a\nb\t"}];
+@Let[escaped_char, '\u{4e2d}'];
+@Let[chars, {'x', '\''}];
+@Let[变量, 1];
+@Let[__temp, 2];
+@Let[_, 3];
+@Let[__, 4];
+
+@Let[pair : Pair[u8, i64], (1u, 2)];
+@Let[list : List[u8], {1u, 2u}];
+@Let[some, Option/Some[1]];
+@Let[call, AddI64[1, 2]];
+@Let[anon, @Fn[[x : i64] : i64, AddI64[x, 1]]];
+
+@Def[addOne, [x : i64] : i64, AddI64[x, 1]];
+@Def[makeAdder, [x : i64] : Fn[[i64] : i64], @Fn[[y : i64] : i64, AddI64[x, y]]];
+@Fix[
+  @Def[isEven, [n : u8] : bool, @If[EqualU8[n, 0u], true, true]],
+  @Def[isOdd, [n : u8] : bool, @If[EqualU8[n, 0u], false, false]]
+];
+@Fix[];
+@Let[applied, makeAdder[1][2]];
+
+@Data[Shape, {Point[], Circle[f64]}];
+@Let[shape, Shape/Circle[2.0]];
+@Let[area, @Match[shape, {
+  (/Point[], 0.0),
+  (/Circle[r], r)
+}]];
+@Let[score, 75];
+@Let[grade, @Which[
+  {(LessI64[score, 60], "fail"), (LessI64[score, 90], "pass")},
+  "great"
+]];
+
+@Export[addOne, ^Shape];
+@Use[{sum, (area, circleArea), ^Kind, ^(Point, P)}, "lib/a"];
+@Let[imported_sum, sum[1, 2]];
+@Let[imported_area, circleArea[1.0]];
+
+@Exit[0u];

@@ -1,0 +1,25 @@
+# 连续投递多条消息: 只需一次唤醒, 消息仍须逐条取到.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[sum, @Handler[[self : Pid[i64, i64], total : i64] : i64,
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[n], @If[EqualI64[n, 0], total, @Continue[AddI64[total, n]]]),
+        (/None[], -1)
+      }]]],
+    @Let[burst, @Handler[
+      [self : Pid[nil, nil], target : Pid[i64, i64], remaining : i64] : nil,
+      @If[EqualI64[remaining, 0],
+        @Block[
+          @Let[_, @Send[target, 0u, 0]],
+          nil
+        ],
+        @Block[
+          @Let[_, @Send[target, 0u, 1]],
+          @Continue[target, SubI64[remaining, 1]]
+        ]
+      ]]],
+    @Let[sm, @Spawn[sum, 0]],
+    @Let[sender, @Spawn[burst, sm, 500]],
+    @Let[_, @Join[sender]],
+    @Assert[EqualI64[@ResultGet[@Join[sm], -1], 500], "连续投递不丢消息"]
+  ]]

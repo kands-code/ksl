@@ -1,0 +1,3 @@
+# Main 的物理位置不影响语义: 带尾分号, 且其后仍有顶层语句.
+@Main[[self : Pid[nil, nil]] : nil, @Block[nil]];
+@Let[x, 1];

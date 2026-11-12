@@ -1,0 +1,31 @@
+# Join 的非法目标: 根 Actor 与自身, 均报运行时错误.
+@Let[joins_root, @Handler[[self : Pid[nil, nil], root : Pid[nil, nil]] : nil,
+  @Block[@Let[_, @Join[root]]]]];
+@Let[joins_self, @Handler[[self : Pid[nil, nil]] : nil,
+  @Block[@Let[_, @Join[self]]]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[rooted, @Spawn[joins_root, self]],
+    @Match[@Join[rooted], {
+      (/Ok[_], @Panic["子 Actor 不应正常结束"]),
+      (/Err[e], @Match[e, {
+        (/Failed[_, message], @Assert[
+          EqualString[message, "不能 Join 根 Actor"],
+          "Join 根 Actor 报运行时错误"
+        ]),
+        (_, @Panic["子 Actor 应报运行时错误"])
+      }])
+    }],
+    @Let[looped, @Spawn[joins_self]],
+    @Match[@Join[looped], {
+      (/Ok[_], @Panic["子 Actor 不应正常结束"]),
+      (/Err[e], @Match[e, {
+        (/Failed[_, message], @Assert[
+          EqualString[message, "不能 Join 自身"],
+          "Join 自身报运行时错误"
+        ]),
+        (_, @Panic["子 Actor 应报运行时错误"])
+      }])
+    }]
+  ]]

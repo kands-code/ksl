@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# 推送前检查示例与基准的 ksl 程序.
+
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+scripts/check-programs.sh

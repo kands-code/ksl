@@ -1,0 +1,50 @@
+# 任务管理器的一次性命令入口.
+#
+# 从当前工作目录读写 `tasks.txt`.
+# `tasks.txt` 不存在时视为空列表; 变更命令写入时创建该文件.
+
+@Use[{
+  ^Task,
+  formatList,
+  addTask,
+  completeTask,
+  removeTask,
+  statsText,
+  formatError,
+  dispatch
+}, "lib/model"];
+@Use[{load, save}, "lib/store"];
+
+@Let[usage, StringJoin[{
+  "usage: ",
+  "ksl run main.ksl -- ",
+  "{list|stats|add <priority> <title>|done <id>|remove <id>}"
+}]];
+
+@Def[saveAndReport, [tasks : List[Task], message : string] : nil,
+  @Match[save["tasks.txt", tasks], {
+    (Result/Ok[_], Print[f"{message}\n"]),
+    (Result/Err[error], Print[StringJoin[{formatError[error], "\n"}]])
+  }]];
+
+@Let[args, Args[]];
+
+@If[EqualU64[@ListLength[args], 0U],
+  Print[f"{usage}\n"],
+  @Match[load["tasks.txt"], {
+    (Result/Ok[tasks], @Match[dispatch[@ListGet[args, 0U], args], {
+      (/Some[request], @Match[request, {
+        (/ListTasks[], Print[StringJoin[{formatList[tasks], "\n"}]]),
+        (/Stats[], Print[StringJoin[{statsText[tasks], "\n"}]]),
+        (/AddTask[title, priority], @Block[
+          @Let[added, addTask[tasks, title, priority]],
+          @Let[id, @Snd[added]],
+          saveAndReport[@Fst[added], f"added {id}"]
+        ]),
+        (/CompleteTask[id], saveAndReport[completeTask[tasks, id], f"completed {id}"]),
+        (/RemoveTask[id], saveAndReport[removeTask[tasks, id], f"removed {id}"])
+      }]),
+      (/None[], Print[f"{usage}\n"])
+    }]),
+    (Result/Err[error], Print[StringJoin[{formatError[error], "\n"}]])
+  }]]

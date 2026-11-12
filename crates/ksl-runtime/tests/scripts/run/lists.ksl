@@ -1,0 +1,101 @@
+@Def[i64ListEq, [xs : List[i64], ys : List[i64]] : bool,
+  @Which[
+    {(@IsListEmpty[xs], @IsListEmpty[ys]),
+     (@IsListEmpty[ys], false)},
+    And[
+      EqualI64[@ListHead[xs], @ListHead[ys]],
+      i64ListEq[@ListTail[xs], @ListTail[ys]]
+    ]
+  ]
+];
+
+@Let[l, {1, 2, 3, 4}];
+@Assert[EqualI64[@ListGet[l, 1U], 2], "按下标取值"];
+@Assert[EqualU64[@ListLength[l], 4U], "原列表长度"];
+@Assert[i64ListEq[@ListUpdate[l, 0U, 9], {9, 2, 3, 4}], "按下标更新"];
+@Assert[i64ListEq[@ListAppend[@ListUpdate[l, 0U, 9], 5], {9, 2, 3, 4, 5}], "列表追加"];
+@Assert[i64ListEq[@ListPrepend[{2, 3}, 1], {1, 2, 3}], "列表前置"];
+@Assert[
+  EqualU8[@ListGet[@ListPrepend[{2u, 3u}, 1u], 0U], 1u],
+  "列表前置保持元素类型"
+];
+@Assert[i64ListEq[@ListTake[l, 2U], {1, 2}], "取前若干元素"];
+@Assert[i64ListEq[@ListTake[l, 99U], l], "取超过长度返回整个列表"];
+@Assert[EqualU64[@ListLength[@ListTake[l, 0U]], 0U], "取零个元素"];
+@Assert[i64ListEq[@ListDrop[l, 2U], {3, 4}], "丢弃前若干元素"];
+@Assert[EqualU64[@ListLength[@ListDrop[l, 99U]], 0U], "丢弃超过长度返回空列表"];
+
+@Let[doubled, @ListMap[l, @Fn[[x : i64] : i64, MulI64[x, 2]]]];
+@Assert[i64ListEq[doubled, {2, 4, 6, 8}], "列表映射"];
+@Assert[
+  i64ListEq[@ListFilter[doubled, @Fn[[x : i64] : bool, GreaterI64[x, 4]]], {6, 8}],
+  "列表过滤"
+];
+@Assert[
+  i64ListEq[@ListFilter[l, @Fn[[x : i64] : bool, EqualI64[ModuloI64[x, 2], 0]]], {2, 4}],
+  "列表按偶数过滤"
+];
+@Assert[
+  EqualI64[@ListFold[{6, 8}, @Fn[[x : i64, acc : i64] : i64, AddI64[x, acc]], 0], 14],
+  "列表折叠"
+];
+@Assert[
+  EqualBool[@ListAny[l, @Fn[[x : i64] : bool, GreaterI64[x, 2]]], true],
+  "列表存在满足条件的元素"
+];
+@Assert[
+  EqualBool[@ListAll[l, @Fn[[x : i64] : bool, GreaterI64[x, 0]]], true],
+  "列表全部元素满足条件"
+];
+
+@Let[m, {1, 2, 3, 4, 5}];
+@Assert[
+  i64ListEq[@ListTakeWhile[m, @Fn[[x : i64] : bool, LessI64[x, 3]]], {1, 2}],
+  "取满足条件的前缀"
+];
+@Assert[
+  i64ListEq[@ListDropWhile[m, @Fn[[x : i64] : bool, LessI64[x, 3]]], {3, 4, 5}],
+  "丢弃满足条件的前缀"
+];
+@Assert[i64ListEq[@ListReverse[m], {5, 4, 3, 2, 1}], "列表反转"];
+@Assert[i64ListEq[@ListRepeat[7, 3U], {7, 7, 7}], "列表重复"];
+@Assert[i64ListEq[@ListFlatten[{{1, 2}, {3}}], {1, 2, 3}], "列表摊平"];
+@Assert[
+  i64ListEq[
+    @ListMap[@ListChunk[m, 2U], @Fn[[xs : List[i64]] : i64, U64ToI64[@ListLength[xs]]]],
+    {2, 2, 1}
+  ],
+  "列表分组"
+];
+@Assert[
+  i64ListEq[
+    @ListZipWith[{1, 2, 3}, {10, 20}, @Fn[[a : i64, b : i64] : i64, AddI64[a, b]]],
+    {11, 22}
+  ],
+  "拉链合并"
+];
+@Assert[EqualI64[@Fst[@ListGet[@ListZip[{1, 2}, {'a', 'b', 'c'}], 0U]], 1], "拉链取首项"];
+@Assert[i64ListEq[@ListRiffle[{1, 2, 3}, 0, 1U], {1, 0, 2, 0, 3}], "交错插入"];
+@Assert[EqualU64[@ListLength[@ListRiffle[l, 0, 2U]], 5U], "交错复制后的长度"];
+@Assert[EqualU64[@ListLength[@ListWindow[l, 2U]], 3U], "滑窗后的长度"];
+@Assert[
+  i64ListEq[
+    @ListMapIndexed[{10, 20, 30}, @Fn[[i : u64, x : i64] : i64, AddI64[U64ToI64[i], x]]],
+    {10, 21, 32}
+  ],
+  "带下标映射"
+];
+@Assert[i64ListEq[@ListPrefixFold[{1, 2, 3}, AddI64, 0], {0, 1, 3, 6}], "前缀折叠"];
+
+@Let[mapped, @ListMap[{1.5, 2.5}, @Fn[[x : f64] : f64, MulF64[x, 2.0]]]];
+@Assert[EqualF64[@ListGet[mapped, 0U], 3.0], "浮点映射后的首项"];
+@Assert[EqualF64[@ListGet[mapped, 1U], 5.0], "浮点映射后的次项"];
+
+@Let[joined, @ListConcatenate[{'a', 'b'}, {'c'}]];
+@Assert[EqualChar[@ListGet[joined, 0U], 'a'], "字符拼接后的首项"];
+@Assert[EqualChar[@ListGet[joined, 1U], 'b'], "字符拼接后的次项"];
+@Assert[EqualChar[@ListGet[joined, 2U], 'c'], "字符拼接后的末项"];
+
+@Let[truthy, @ListFilter[{true, false, true}, @Fn[[x : bool] : bool, x]]];
+@Assert[EqualBool[@ListGet[truthy, 0U], true], "布尔过滤后的首项"];
+@Assert[EqualBool[@ListGet[truthy, 1U], true], "布尔过滤后的次项"];

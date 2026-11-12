@@ -1,0 +1,22 @@
+# 退出原因: 主动中止为 Failed, Halt 为 Halted.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[panicking, @Handler[[self : Pid[i64, nil]] : nil, @Panic["actor 内中止"]]],
+    @Let[pp, @Spawn[panicking]],
+    @Let[reason, @Match[@Join[pp], {
+      (/Ok[_], ""),
+      (/Err[e], @Match[e, { (/Failed[_, message], message), (_, "") }])
+    }]],
+    @Assert[
+      EqualString[reason, "主动中止: actor 内中止"],
+      "Actor 内主动中止带说明"
+    ],
+
+    @Let[halting, @Handler[[self : Pid[nil, nil]] : nil, @Halt[]]],
+    @Let[hp, @Spawn[halting]],
+    @Let[halt_reason, @Match[@Join[hp], {
+      (/Ok[_], "无"),
+      (/Err[e], @Match[e, { (/Halted[], "Halted"), (_, "其他") }])
+    }]],
+    @Assert[EqualString[halt_reason, "Halted"], "@Halt 终止自身, 退出原因为 Halted"]
+  ]]

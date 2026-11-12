@@ -1,0 +1,57 @@
+# 消息语义: 状态更新, 定义处捕获, 多信箱与携带 Pid 的回复.
+@Data[Request, {Query[Pid[Response, string]]}];
+@Data[Response, {Answer[string]}];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[counter, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+      @Match[@Receive[0u, Option/Some[10U]], {
+        (/Some[m], @Continue[AddI64[n, m]]),
+        (/None[], n)
+      }]]],
+    @Let[c, @Spawn[counter, 0]],
+    @Let[_, @Send[c, 0u, 5]],
+    @Assert[
+      EqualI64[@Match[@Join[c], { (/Ok[v], v), (/Err[_], -1) }], 5],
+      "信箱消息更新状态"
+    ],
+
+    @Let[bias, 10],
+    @Let[biased, @Handler[[self : Pid[i64, i64], n : i64] : i64, AddI64[bias, n]]],
+    @Let[bias, 20],
+    @Let[bp, @Spawn[biased, 5]],
+    @Assert[
+      EqualI64[@Match[@Join[bp], { (/Ok[v], v), (/Err[_], -1) }], 15],
+      "Handler 按定义处捕获"
+    ],
+
+    @Let[named, @Handler[[self : Pid[i64, string, string]] : string,
+      @Match[@Receive[1u, Option/None[]], { (/Some[s], s), (/None[], "none") }]]],
+    @Let[mp, @Spawn[named]],
+    @Let[_, @Send[mp, 1u, "hi"]],
+    @Assert[
+      EqualString[@Match[@Join[mp], { (/Ok[v], v), (/Err[_], "err") }], "hi"],
+      "多信箱按索引投递"
+    ],
+
+    @Let[client, @Handler[[self : Pid[Response, string]] : string,
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[resp], @Match[resp, { (/Answer[s], s) }]),
+        (/None[], "none")
+      }]]],
+    @Let[server, @Handler[[self : Pid[Request, string]] : string,
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[req], @Match[req, { (/Query[c2], @Block[
+          @Let[_, @Send[c2, 0u, Response/Answer["ok"]]],
+          "done"
+        ]) }]),
+        (/None[], "none")
+      }]]],
+    @Let[cp, @Spawn[client]],
+    @Let[sp, @Spawn[server]],
+    @Let[_, @Send[sp, 0u, Request/Query[cp]]],
+    @Assert[
+      EqualString[@Match[@Join[cp], { (/Ok[v], v), (/Err[_], "err") }], "ok"],
+      "消息携带 Pid 并回复"
+    ]
+  ]]

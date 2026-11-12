@@ -1,0 +1,10 @@
+@Assert[EqualI64[@Fn[[x : i64] : i64, AddI64[x, 1]][5], 6], "立即应用"];
+@Assert[
+  EqualI64[@Fn[[x : i64] : Fn[[i64] : i64], @Fn[[y : i64] : i64, AddI64[x, y]]][3][4], 7],
+  "返回函数再应用"
+];
+@Assert[
+  EqualI64[@If[true, @Fn[[x : i64] : i64, x], @Fn[[x : i64] : i64, AddI64[x, 1]]][5], 5],
+  "分支给出函数再应用"
+];
+@Assert[EqualI64[AddI64[1, @Fn[[x : i64] : i64, MulI64[x, 2]][3]], 7], "实参位置的闭包"];

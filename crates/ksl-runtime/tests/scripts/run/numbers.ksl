@@ -1,0 +1,64 @@
+# 算术: 取整方向与余数符号按函数区分.
+@Assert[EqualI64[DivideI64[-7, 2], -4], "向下取整除法向负无穷"];
+@Assert[EqualI64[QuotientI64[-7, 2], -3], "截断除法向零"];
+@Assert[EqualI64[RemainderI64[-7, 2], -1], "余数符号随被除数"];
+@Assert[EqualI64[ModuloI64[-7, 2], 1], "取模符号随除数"];
+
+@Assert[EqualU8[AddU8[49u, 1u], 50u], "u8 加法"];
+@Assert[EqualU64[AddU64[1U, 2U], 3U], "u64 加法"];
+@Assert[EqualU64[SubU64[3U, 1U], 2U], "u64 减法"];
+@Assert[EqualU64[MulU64[2U, 3U], 6U], "u64 乘法"];
+@Assert[EqualU64[DivideU64[7U, 2U], 3U], "u64 向下取整除法"];
+@Assert[EqualU64[ModuloU64[7U, 2U], 1U], "u64 取模"];
+
+# f64 遵循 IEEE 754, 不报运行时错误.
+@Assert[GreaterF64[DivideF64[1.0, 0.0], 1.0e300], "除零得无穷"];
+@Assert[Not[EqualF64[Sqrt[-1.0], Sqrt[-1.0]]], "负数开方得 NaN 且不等于自身"];
+
+# 取整: 向零截断, 向上, 向下与银行家舍入.
+@Assert[EqualI64[Truncate[-1.5], -1], "向零截断"];
+@Assert[EqualI64[Ceiling[-1.5], -1], "向上取整"];
+@Assert[EqualI64[Floor[-1.5], -2], "向下取整"];
+@Assert[EqualI64[Round[0.5], 0], "平局取偶 0.5"];
+@Assert[EqualI64[Round[1.5], 2], "平局取偶 1.5"];
+@Assert[EqualI64[Round[2.5], 2], "平局取偶 2.5"];
+
+@Assert[EqualI64[AbsI64[-5], 5], "i64 绝对值"];
+@Assert[EqualF64[AbsF64[-2.5], 2.5], "f64 绝对值"];
+
+# 数学函数. ArcTan2 的参数顺序为 x, y.
+@Assert[EqualF64[Power[2.0, 10.0], 1024.0], "幂运算"];
+@Assert[EqualF64[Power[4.0, 0.5], 2.0], "小数指数"];
+@Assert[EqualF64[Sqrt[9.0], 3.0], "平方根"];
+@Assert[EqualF64[ArcTan2[1.0, 0.0], 0.0], "ArcTan2 参数顺序为 x, y"];
+@Assert[EqualF64[ArcTan2[0.0, 1.0], 1.5707963267948966], "ArcTan2 第一象限"];
+
+# 移位达到字宽时结果为 0.
+@Assert[EqualI64[ShiftLeftI64[1, 64u], 0], "i64 左移达到字宽"];
+@Assert[EqualI64[ShiftRightI64[1, 64u], 0], "i64 逻辑右移达到字宽"];
+@Assert[EqualU8[ShiftLeftU8[1u, 8u], 0u], "u8 左移达到字宽"];
+@Assert[EqualU64[ShiftLeftU64[1U, 64u], 0U], "u64 左移达到字宽"];
+@Assert[EqualU64[ShiftRightU64[1024U, 3u], 128U], "u64 逻辑右移"];
+
+@Assert[EqualI64[BitAndI64[12, 10], 8], "按位与"];
+@Assert[EqualI64[BitOrI64[12, 10], 14], "按位或"];
+@Assert[EqualI64[BitXorI64[12, 10], 6], "按位异或"];
+@Assert[EqualU8[BitReverseU8[1u], 128u], "按位反转"];
+
+# 转换: 窄化转换越界报错, 精确转换不损失精度.
+@Assert[EqualF64[I64ToF64[7], 7.0], "i64 转 f64"];
+@Assert[EqualF64[U64ToF64[3U], 3.0], "u64 转 f64"];
+@Assert[EqualI64[U8ToI64[7u], 7], "u8 转 i64"];
+@Assert[EqualU64[U8ToU64[1u], 1U], "u8 转 u64"];
+@Assert[EqualI64[U64ToI64[7U], 7], "u64 转 i64"];
+@Assert[EqualU8[U64ToU8[7U], 7u], "u64 转 u8"];
+@Assert[EqualU8[I64ToU8[7], 7u], "i64 转 u8"];
+@Assert[EqualU64[I64ToU64[7], 7U], "i64 转 u64"];
+
+# 比较与布尔.
+@Assert[EqualBool[EqualU64[1U, 1U], true], "u64 相等"];
+@Assert[EqualBool[LessU8[1u, 2u], true], "u8 小于"];
+@Assert[EqualBool[GreaterU64[2U, 1U], true], "u64 大于"];
+@Assert[EqualBool[LessF64[1.0, 2.0], true], "f64 小于"];
+@Assert[EqualBool[Or[false, true], true], "逻辑或"];
+@Assert[EqualBool[And[true, false], false], "逻辑与"];
