@@ -72,6 +72,18 @@ fn usage_errors_report_chinese_messages() {
 }
 
 #[test]
+fn main_is_module_only() {
+    let code = "@Main[[self : Pid[nil, nil]] : nil, nil]";
+    let output = run(&["run", "--code", code]);
+    assert!(!output.status.success(), "命令行代码不应接受 @Main");
+    let text = stderr(&output);
+    assert!(
+        text.contains("@Main 只允许出现在模块中"),
+        "错误信息应说明 @Main 只允许出现在模块中: {text}"
+    );
+}
+
+#[test]
 fn run_accepts_all_source_and_argument_forms() {
     let output = run(&[
         "run",

@@ -6,8 +6,8 @@
 //! 与宿主额外根出发, 清扫时只清空不可达闭包的捕获与不可达 Actor 句柄的存储,
 //! 环被截断后由引用计数释放.
 //!
-//! 收集器是 stop-the-world 的, 只能在安全点调用: 除传入的根与调度器内部
-//! 状态外, Rust 栈上不能还有额外的 `Value`, `Closure` 或 `ActorHandle`.
+//! 收集器只能在调度器安全点调用: 除传入的根与调度器内部状态外,
+//! Rust 栈上不能还有额外的 `Value`, `Closure` 或 `ActorHandle`.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -252,6 +252,8 @@ impl Marker {
             | Value::Builtin(_)
             | Value::Set(_)
             | Value::File(_)
+            | Value::Socket(_)
+            | Value::TcpListener(_)
             | Value::DateTime(_) => {},
         }
     }

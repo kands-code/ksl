@@ -28,7 +28,7 @@ impl Checker {
         self.record_data_types(program)?;
         for stmt in &program.stmts {
             let ty = self.check_expr(stmt)?;
-            // 语句值处置规则: 非 nil 值必须显式绑定或抛弃; 底类型不出值, 放行.
+            // 语句值处置规则: 非 nil 值必须显式绑定或丢弃; 底类型不出值, 放行.
             if !matches!(self.infer.shallow(&ty), InferTy::Nil | InferTy::Never) {
                 let found = self.infer.finalize(&ty)?;
                 return Err(KslError::with_subject(
@@ -75,7 +75,7 @@ impl Checker {
             let ExprKind::Special(Special::Data { name, variants }) = &stmt.node else {
                 continue;
             };
-            let data_ty = Type::Data(name.node);
+            let data_ty = Type::data(name.node);
             self.infer_types
                 .insert(name.key(), InferTy::from_concrete(&data_ty));
             for variant in variants {
@@ -142,33 +142,34 @@ impl Checker {
                     )
                 })?,
             ExprKind::List(items) => {
-                let elem = match expected {
-                    Some(InferTy::List(elem)) => (**elem).clone(),
-                    _ => self.infer.fresh(expr.span, "列表元素"),
-                };
+                let elem = expected
+                    .and_then(InferTy::as_list)
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(expr.span, "列表元素"));
                 for item in items {
                     let item_ty = self.check_expr_expect(item, Some(&elem))?;
                     self.infer.unify(&elem, &item_ty, item.span)?;
                 }
-                let list = InferTy::List(Box::new(elem));
+                let list = InferTy::list(elem);
                 if let Some(expected) = expected {
                     self.infer.unify(expected, &list, expr.span)?;
                 }
                 list
             },
             ExprKind::Pair(first, second) => {
-                let (a, b) = match expected {
-                    Some(InferTy::Pair(a, b)) => ((**a).clone(), (**b).clone()),
-                    _ => (
+                let (a, b) = if let Some((a, b)) = expected.and_then(InferTy::as_pair) {
+                    (a.clone(), b.clone())
+                } else {
+                    (
                         self.infer.fresh(first.span, "Pair 首分量"),
                         self.infer.fresh(second.span, "Pair 次分量"),
-                    ),
+                    )
                 };
                 let first_ty = self.check_expr_expect(first, Some(&a))?;
                 self.infer.unify(&a, &first_ty, first.span)?;
                 let second_ty = self.check_expr_expect(second, Some(&b))?;
                 self.infer.unify(&b, &second_ty, second.span)?;
-                let pair = InferTy::Pair(Box::new(a), Box::new(b));
+                let pair = InferTy::pair(a, b);
                 if let Some(expected) = expected {
                     self.infer.unify(expected, &pair, expr.span)?;
                 }
@@ -181,6 +182,7 @@ impl Checker {
                 }
                 self.check_call(head, args, expr.span)?
             },
+            ExprKind::Apply { callee, args } => self.check_apply(callee, args, expr.span)?,
             ExprKind::Special(form) => {
                 let ty = self.check_special_expect(form, expr.span, expected)?;
                 if let Some(expected) = expected {
@@ -249,94 +251,133 @@ impl Checker {
         if !is_option && !is_result {
             return Ok(None);
         }
-        let want = |count: usize| -> Result<(), KslError> {
-            if args.len() != count {
-                return Err(KslError::new(
-                    ErrorKind::ArityMismatch {
-                        expected: count,
-                        found: args.len(),
-                    },
-                    span,
-                ));
-            }
-            Ok(())
-        };
         if is_option {
-            match variant {
-                v if v == intern("Some") => {
-                    want(1)?;
-                    let elem = match expected {
-                        Some(InferTy::OptionT(inner)) => (**inner).clone(),
-                        _ => self.infer.fresh(span, "Option/Some 元素"),
-                    };
-                    let option = InferTy::OptionT(Box::new(elem.clone()));
-                    if let Some(expected) = expected {
-                        self.infer.unify(expected, &option, span)?;
-                    }
-                    let arg_ty = self.check_expr_expect(&args[0], Some(&elem))?;
-                    self.infer.unify(&elem, &arg_ty, args[0].span)?;
-                    Ok(Some(option))
+            let result = match variant {
+                v if v == intern("Some") => self.check_option_some(args, span, expected)?,
+                v if v == intern("None") => self.check_option_none(args, span, expected)?,
+                _ => {
+                    return Err(KslError::with_subject(
+                        ErrorKind::UnknownName,
+                        head.name.span,
+                        format!("Option/{}", resolve(variant)),
+                    ));
                 },
-                v if v == intern("None") => {
-                    want(0)?;
-                    let elem = match expected {
-                        Some(InferTy::OptionT(inner)) => (**inner).clone(),
-                        _ => self.infer.fresh(span, "Option/None 元素"),
-                    };
-                    let option = InferTy::OptionT(Box::new(elem));
-                    if let Some(expected) = expected {
-                        self.infer.unify(expected, &option, span)?;
-                    }
-                    Ok(Some(option))
-                },
-                _ => Err(KslError::with_subject(
-                    ErrorKind::UnknownName,
-                    head.name.span,
-                    format!("Option/{}", resolve(variant)),
-                )),
-            }
+            };
+            Ok(Some(result))
         } else {
-            match variant {
-                v if v == intern("Ok") => {
-                    want(1)?;
-                    let (ok, err) = match expected {
-                        Some(InferTy::ResultT(ok, err)) => ((**ok).clone(), (**err).clone()),
-                        _ => (
-                            self.infer.fresh(span, "Result/Ok 成功类型"),
-                            self.infer.fresh(span, "Result/Ok 错误类型"),
-                        ),
-                    };
-                    let result = InferTy::ResultT(Box::new(ok.clone()), Box::new(err));
-                    if let Some(expected) = expected {
-                        self.infer.unify(expected, &result, span)?;
-                    }
-                    let arg_ty = self.check_expr_expect(&args[0], Some(&ok))?;
-                    self.infer.unify(&ok, &arg_ty, args[0].span)?;
-                    Ok(Some(result))
+            let result = match variant {
+                v if v == intern("Ok") => self.check_result_ok(args, span, expected)?,
+                v if v == intern("Err") => self.check_result_err(args, span, expected)?,
+                _ => {
+                    return Err(KslError::with_subject(
+                        ErrorKind::UnknownName,
+                        head.name.span,
+                        format!("Result/{}", resolve(variant)),
+                    ));
                 },
-                v if v == intern("Err") => {
-                    want(1)?;
-                    let (ok, err) = match expected {
-                        Some(InferTy::ResultT(ok, err)) => ((**ok).clone(), (**err).clone()),
-                        _ => (
-                            self.infer.fresh(span, "Result/Err 成功类型"),
-                            self.infer.fresh(span, "Result/Err 错误类型"),
-                        ),
-                    };
-                    let result = InferTy::ResultT(Box::new(ok), Box::new(err.clone()));
-                    if let Some(expected) = expected {
-                        self.infer.unify(expected, &result, span)?;
-                    }
-                    let arg_ty = self.check_expr_expect(&args[0], Some(&err))?;
-                    self.infer.unify(&err, &arg_ty, args[0].span)?;
-                    Ok(Some(result))
-                },
-                _ => Err(KslError::with_subject(
-                    ErrorKind::UnknownName,
-                    head.name.span,
-                    format!("Result/{}", resolve(variant)),
-                )),
-            }
+            };
+            Ok(Some(result))
+        }
+    }
+
+    fn check_option_some(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<&InferTy>,
+    ) -> Result<InferTy, KslError> {
+        Self::check_arity(args, 1, span)?;
+        let elem = expected
+            .and_then(InferTy::as_option)
+            .cloned()
+            .unwrap_or_else(|| self.infer.fresh(span, "Option/Some 元素"));
+        let option = InferTy::option(elem.clone());
+        self.unify_expected(expected, &option, span)?;
+        let arg_ty = self.check_expr_expect(&args[0], Some(&elem))?;
+        self.infer.unify(&elem, &arg_ty, args[0].span)?;
+        Ok(option)
+    }
+
+    fn check_option_none(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<&InferTy>,
+    ) -> Result<InferTy, KslError> {
+        Self::check_arity(args, 0, span)?;
+        let elem = expected
+            .and_then(InferTy::as_option)
+            .cloned()
+            .unwrap_or_else(|| self.infer.fresh(span, "Option/None 元素"));
+        let option = InferTy::option(elem);
+        self.unify_expected(expected, &option, span)?;
+        Ok(option)
+    }
+
+    fn check_result_ok(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<&InferTy>,
+    ) -> Result<InferTy, KslError> {
+        Self::check_arity(args, 1, span)?;
+        let (ok, err) = expected.and_then(InferTy::as_result).map_or_else(
+            || {
+                (
+                    self.infer.fresh(span, "Result/Ok 成功类型"),
+                    self.infer.fresh(span, "Result/Ok 错误类型"),
+                )
+            },
+            |(ok, err)| (ok.clone(), err.clone()),
+        );
+        let result = InferTy::result(ok.clone(), err);
+        self.unify_expected(expected, &result, span)?;
+        let arg_ty = self.check_expr_expect(&args[0], Some(&ok))?;
+        self.infer.unify(&ok, &arg_ty, args[0].span)?;
+        Ok(result)
+    }
+
+    fn check_result_err(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<&InferTy>,
+    ) -> Result<InferTy, KslError> {
+        Self::check_arity(args, 1, span)?;
+        let (ok, err) = expected.and_then(InferTy::as_result).map_or_else(
+            || {
+                (
+                    self.infer.fresh(span, "Result/Err 成功类型"),
+                    self.infer.fresh(span, "Result/Err 错误类型"),
+                )
+            },
+            |(ok, err)| (ok.clone(), err.clone()),
+        );
+        let result = InferTy::result(ok, err.clone());
+        self.unify_expected(expected, &result, span)?;
+        let arg_ty = self.check_expr_expect(&args[0], Some(&err))?;
+        self.infer.unify(&err, &arg_ty, args[0].span)?;
+        Ok(result)
+    }
+
+    /// 后缀调用: 被调是任意表达式, 先定型再校验实参.
+    ///
+    /// 只有函数类型可调用; never 同样拒绝, 死代码不给静默让位,
+    /// 避免不返回的表达式被应用时掩盖笔误.
+    pub(super) fn check_apply(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        let callee_ty = self.check_expr(callee)?;
+        let callee_ty = self.infer.finalize(&callee_ty)?;
+        match callee_ty {
+            Type::Fn(params, ret) => self.check_args(&params, &ret, args, span),
+            other => Err(KslError::new(
+                ErrorKind::NotCallable { found: other },
+                callee.span,
+            )),
         }
     }
 
@@ -364,7 +405,7 @@ impl Checker {
                     format!("{}/{}", qualifier.node, name),
                 ));
             };
-            (fields.clone(), Type::Data(qualifier.node))
+            (fields.clone(), Type::data(qualifier.node))
         } else if let Some(ty) = self.env.lookup(*name).cloned() {
             match ty {
                 Type::Fn(params, ret) => (params, *ret),

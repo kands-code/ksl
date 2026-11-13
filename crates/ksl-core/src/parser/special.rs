@@ -42,7 +42,7 @@ impl Parser<'_> {
             }
             self.form_def()?
         } else if node == kw.exit_ {
-            if self.context != Context::Top {
+            if self.context != Context::Top && !self.in_main {
                 return Err(KslError::new(ErrorKind::ExitNotTopLevel, name.span));
             }
             let code = self.expr(Context::Expression)?;
@@ -50,8 +50,26 @@ impl Parser<'_> {
                 code: Box::new(code),
             }
         } else if node == kw.handler_ {
-            let (params, ret, body) = self.params_ret_body()?;
+            let saved = self.in_main;
+            self.in_main = false;
+            let parsed = self.params_ret_body();
+            self.in_main = saved;
+            let (params, ret, body) = parsed?;
             Special::Handler {
+                params,
+                ret,
+                body: Box::new(body),
+            }
+        } else if node == kw.main_ {
+            if self.context != Context::Top {
+                return Err(KslError::new(ErrorKind::ModuleFormNotTopLevel, name.span));
+            }
+            let saved = self.in_main;
+            self.in_main = true;
+            let parsed = self.params_ret_body();
+            self.in_main = saved;
+            let (params, ret, body) = parsed?;
+            Special::Main {
                 params,
                 ret,
                 body: Box::new(body),
@@ -249,7 +267,11 @@ impl Parser<'_> {
 
     /// 匿名函数 `@Fn[[x : i64, ...] : ret, 体]`.
     fn form_fn(&mut self) -> Result<Special, KslError> {
-        let (params, ret, body) = self.params_ret_body()?;
+        let saved = self.in_main;
+        self.in_main = false;
+        let parsed = self.params_ret_body();
+        self.in_main = saved;
+        let (params, ret, body) = parsed?;
         Ok(Special::Fn {
             params,
             ret,
@@ -265,7 +287,11 @@ impl Parser<'_> {
     fn def_body(&mut self) -> Result<Def, KslError> {
         let name = self.ident()?;
         self.comma()?;
-        let (params, ret, body) = self.params_ret_body()?;
+        let saved = self.in_main;
+        self.in_main = false;
+        let parsed = self.params_ret_body();
+        self.in_main = saved;
+        let (params, ret, body) = parsed?;
         Ok(Def {
             name,
             params,
@@ -275,8 +301,6 @@ impl Parser<'_> {
     }
 
     fn form_spawn(&mut self, detached: bool) -> Result<Special, KslError> {
-        let count = self.expr(Context::Expression)?;
-        self.comma()?;
         let handler = self.expr(Context::Expression)?;
         // handler 之后每个实参都以逗号引导; 尾逗号由外层闭符号检查拒绝.
         let mut args = Vec::new();
@@ -284,7 +308,6 @@ impl Parser<'_> {
             args.push(self.expr(Context::Expression)?);
         }
         Ok(Special::Spawn {
-            count: Box::new(count),
             handler: Box::new(handler),
             args,
             detached,

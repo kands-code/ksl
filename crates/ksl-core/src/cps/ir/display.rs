@@ -18,8 +18,10 @@ impl fmt::Display for PrimOp {
             Self::DictLiteral => f.write_str("DictLiteral"),
             Self::SetLiteral => f.write_str("SetLiteral"),
             Self::Registry(op) => f.write_str(op.name()),
-            Self::Spawn { detached: false } => f.write_str("Spawn"),
-            Self::Spawn { detached: true } => f.write_str("SpawnDetached"),
+            Self::Spawn {
+                detached: false, ..
+            } => f.write_str("Spawn"),
+            Self::Spawn { detached: true, .. } => f.write_str("SpawnDetached"),
             Self::Send => f.write_str("Send"),
             Self::Join => f.write_str("Join"),
             Self::Kill => f.write_str("Kill"),

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use super::link::{LinkedGraph, LinkedModule};
 use super::{ModuleCache, ModuleId, value_roots};
+use crate::ast::{ExprKind, Program, Special};
 use crate::check::ModuleContext;
 use crate::cps::scheduler::Scheduler;
 use crate::error::RuntimeError;
@@ -22,6 +23,10 @@ pub enum RootEnv {
 /// 一次根加载的执行结果.
 pub struct Execution {
     pub main_value: Value,
+    /// 根模块声明了 `@Main` 时的 Handler 蓝图; 由宿主作为根 Actor 启动.
+    pub main_handler: Option<Value>,
+    /// `@Main` 的 self 信箱数; 仅 `main_handler` 为 Some 时有值.
+    pub main_mailboxes: Option<usize>,
     pub context: ModuleContext,
     /// 主模块导出值组成的环境; 只保留导出值时为导出值, 保留全部绑定时为执行后的全局环境.
     pub globals: Env,
@@ -71,59 +76,29 @@ pub fn execute_with_cache(
     root_env: RootEnv,
     cache: &mut ModuleCache,
 ) -> Result<Execution, RuntimeError> {
-    execute_with_cache_impl(scheduler, graph, root_env, cache, true)
-}
-
-/// 在当前根轮次内执行模块图, 不递增 Actor 清理轮次.
-///
-/// 供 REPL 按输入内位置处理多个 `@Use`; 调用方负责先调用
-/// [`Scheduler::begin_root`].
-///
-/// # Errors
-///
-/// 任一模块的运行时错误或 `@Exit`.
-pub fn execute_with_cache_in_root(
-    scheduler: &mut Scheduler,
-    graph: &LinkedGraph,
-    root_env: RootEnv,
-    cache: &mut ModuleCache,
-) -> Result<Execution, RuntimeError> {
-    execute_with_cache_impl(scheduler, graph, root_env, cache, false)
-}
-
-fn execute_with_cache_impl(
-    scheduler: &mut Scheduler,
-    graph: &LinkedGraph,
-    root_env: RootEnv,
-    cache: &mut ModuleCache,
-    begin_root: bool,
-) -> Result<Execution, RuntimeError> {
     let base = match root_env {
         RootEnv::OnlyExports => Env::new(),
         RootEnv::KeepBindings => scheduler.globals().clone(),
     };
-    if begin_root {
-        scheduler.begin_root();
-    }
     let mut run = ModuleRun {
         graph,
         base,
         values: cache.values.clone(),
         main_value: None,
+        main_handler: None,
+        main_mailboxes: None,
         main_globals: Env::new(),
     };
     if let Err(err) = run.run(scheduler) {
-        // 失败时回滚全局绑定, 导入值与模块副作用留下的绑定一并撤销;
-        // 本轮启动的 Actor 也一并终止.
+        // 失败时回滚全局绑定, 导入值与模块副作用留下的绑定一并撤销.
         scheduler.set_globals(run.base);
-        if begin_root {
-            scheduler.finish_root(false);
-        }
         return Err(err);
     }
     let ModuleRun {
         mut values,
         main_value,
+        main_handler,
+        main_mailboxes,
         mut main_globals,
         ..
     } = run;
@@ -140,11 +115,10 @@ fn execute_with_cache_impl(
     // 根模块不是可被导入的模块, 不进入会话缓存.
     values.remove(&graph.root);
     cache.update_values(values);
-    if begin_root {
-        scheduler.finish_root(true);
-    }
     Ok(Execution {
         main_value: main_value.unwrap_or(Value::Nil),
+        main_handler,
+        main_mailboxes,
         context,
         globals: main_globals,
         module_values,
@@ -157,6 +131,8 @@ struct ModuleRun<'a> {
     base: Env,
     values: imbl::HashMap<ModuleId, HashMap<Symbol, Value>>,
     main_value: Option<Value>,
+    main_handler: Option<Value>,
+    main_mailboxes: Option<usize>,
     main_globals: Env,
 }
 
@@ -184,7 +160,17 @@ impl ModuleRun<'_> {
             scheduler.pop_extra_roots();
             let value = result?;
             if *id == self.graph.root {
-                self.main_value = Some(value);
+                if program_has_main(&module.program) {
+                    self.main_mailboxes = Some(
+                        crate::check::main_mailboxes(&module.program, &module.types)
+                            .ok_or_else(|| RuntimeError::internal("@Main 缺少信箱数"))?,
+                    );
+                    self.main_handler = Some(value);
+                    // 顶层语句的值不作为程序结果; 根 Actor 的值才是.
+                    self.main_value = Some(Value::Nil);
+                } else {
+                    self.main_value = Some(value);
+                }
             }
             let exports = module_exports(module, scheduler, &self.values)?;
             if *id == self.graph.root {
@@ -243,6 +229,14 @@ fn module_exports(
         exports.insert(*name, value);
     }
     Ok(exports)
+}
+
+/// 根模块程序是否以 `@Main` 结尾; 归一化保证 @Main 总在末尾.
+fn program_has_main(program: &Program) -> bool {
+    program
+        .tail
+        .as_ref()
+        .is_some_and(|tail| matches!(&tail.node, ExprKind::Special(Special::Main { .. })))
 }
 
 fn env_from_values(values: &HashMap<Symbol, Value>) -> Env {

@@ -21,19 +21,16 @@ fn unification_resolves_variable_chains() {
     let a = ctx.fresh(span(), "变量 a");
     let b = ctx.fresh(span(), "变量 b");
     ctx.unify(&a, &b, span()).expect("变量合并应成功");
-    ctx.unify(&b, &InferTy::List(Box::new(InferTy::Char)), span())
+    ctx.unify(&b, &InferTy::list(InferTy::Char), span())
         .expect("绑定应成功");
-    assert_eq!(
-        ctx.finalize(&a).expect("应可解析"),
-        Type::List(Box::new(Type::Char))
-    );
+    assert_eq!(ctx.finalize(&a).expect("应可解析"), Type::list(Type::Char));
 }
 
 #[test]
 fn occurs_check_and_finalization_follow_spans() {
     let mut ctx = InferCtx::default();
     let var = ctx.fresh(span(), "测试变量");
-    let list = InferTy::List(Box::new(var.clone()));
+    let list = InferTy::list(var.clone());
     let err = ctx.unify(&var, &list, span()).expect_err("递归类型应被拒绝");
     assert!(matches!(err.kind, ErrorKind::UndeterminedType { .. }));
 
@@ -43,7 +40,7 @@ fn occurs_check_and_finalization_follow_spans() {
     assert_eq!(err.span, Some(at));
 
     assert_eq!(ctx.render(&unresolved), "_");
-    let list = InferTy::List(Box::new(InferTy::I64));
+    let list = InferTy::list(InferTy::I64);
     ctx.unify(&unresolved, &list, span()).expect("统一应成功");
     assert_eq!(ctx.render(&unresolved), "List[i64]");
 }

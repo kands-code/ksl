@@ -1,0 +1,36 @@
+# @run
+# 字符谓词与标量值: Unicode 空白, 字母, 大小写, ASCII 数字, 字母数字与 u64 转换.
+@Assert[IsWhitespace[' '], "空格是空白"];
+@Assert[IsWhitespace['\t'], "制表符是空白"];
+@Assert[IsWhitespace['\n'], "换行是空白"];
+@Assert[IsWhitespace['　'], "表意空格是 Unicode 空白"];
+@Assert[Not[IsWhitespace['a']], "字母不是空白"];
+
+@Assert[IsAsciiDigit['0'], "0 是 ASCII 数字"];
+@Assert[IsAsciiDigit['9'], "9 是 ASCII 数字"];
+@Assert[Not[IsAsciiDigit['a']], "字母不是 ASCII 数字"];
+@Assert[Not[IsAsciiDigit['٣']], "阿拉伯数字不是 ASCII 数字"];
+
+@Assert[IsLetter['a'], "ASCII 小写是字母"];
+@Assert[IsLetter['Ä'], "带分音符大写是字母"];
+@Assert[IsLetter['中'], "汉字是字母"];
+@Assert[Not[IsLetter['1']], "数字不是字母"];
+
+@Assert[IsUppercase['A'], "A 是大写"];
+@Assert[IsUppercase['Ä'], "Ä 是大写"];
+@Assert[Not[IsUppercase['a']], "a 不是大写"];
+
+@Assert[IsLowercase['a'], "a 是小写"];
+@Assert[IsLowercase['ä'], "ä 是小写"];
+@Assert[Not[IsLowercase['A']], "A 不是小写"];
+
+@Assert[IsAlphanumeric['a'], "字母是字母数字"];
+@Assert[IsAlphanumeric['0'], "ASCII 数字是字母数字"];
+@Assert[IsAlphanumeric['中'], "汉字是字母数字"];
+@Assert[IsAlphanumeric['٣'], "Unicode 数字是字母数字"];
+@Assert[Not[IsAlphanumeric[' ']], "空白不是字母数字"];
+@Assert[Not[IsAlphanumeric['-']], "连字符不是字母数字"];
+
+@Assert[EqualU64[CharToU64['a'], 97U], "ASCII 标量值"];
+@Assert[EqualU64[CharToU64['😀'], 128512U], "非 BMP 标量值"];
+@Assert[EqualChar[U64ToChar[97U], 'a'], "标量值构造字符"]

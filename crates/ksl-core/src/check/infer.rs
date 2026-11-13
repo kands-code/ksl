@@ -4,12 +4,14 @@
 //! 类型表只保存 `Type`. 统一表使用 ena 的 in-place union-find, 变量绑定直接
 //! 存入值槽, 变量来源信息按 `VarId` 索引存于稠密数组.
 
+use std::sync::{Arc, LazyLock};
+
 use ena::unify::{EqUnifyValue, InPlaceUnificationTable, UnifyKey};
 
-use super::types::{HandlerType, PidType, Type};
+use super::types::Type;
 use crate::error::{ErrorKind, KslError};
 use crate::source::Span;
-use crate::symbol::resolve;
+use crate::symbol::{Symbol, keywords, resolve};
 
 /// 类型变量标识; 只在本模块内分配, 不暴露给用户.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,25 +33,10 @@ impl UnifyKey for VarId {
     }
 }
 
-/// 推断期的 Actor 句柄类型.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PidInferType {
-    pub(crate) mailboxes: Vec<InferTy>,
-    pub(crate) ret: Box<InferTy>,
-}
-
-/// 推断期的 Actor 蓝图类型.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HandlerInferType {
-    pub(crate) pid: Box<InferTy>,
-    pub(crate) args: Vec<InferTy>,
-}
-
 /// 推断期类型: 具体类型的形状加上未定的类型变量.
 ///
-/// 与 [`Type`] 同形是刻意为之: 变量可以出现在 `List`, `Pair` 等结构内部,
-/// 因此不能用"变量或具体类型"的二元形态. 两个转换函数都穷尽匹配, 新增
-/// 类型形态时编译器会强制同步.
+/// 镜像 [`Type`] 的结构: 变量可以出现在参数化类型内部. 两个转换函数都
+/// 穷尽匹配, 新增类型形态时编译器会强制同步.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InferTy {
     Var(VarId),
@@ -62,18 +49,128 @@ pub(crate) enum InferTy {
     Str,
     Nil,
     Never,
-    List(Box<InferTy>),
-    Dict(Box<InferTy>, Box<InferTy>),
-    Set(Box<InferTy>),
-    Pair(Box<InferTy>, Box<InferTy>),
-    OptionT(Box<InferTy>),
-    ResultT(Box<InferTy>, Box<InferTy>),
-    PidT(Box<PidInferType>),
-    HandlerT(Box<HandlerInferType>),
     Fn(Vec<InferTy>, Box<InferTy>),
-    Data(crate::symbol::Symbol),
-    File,
-    DateTime,
+    /// 参数化类型应用; 参数与 [`Type`] 一样用 `Arc` 共享.
+    App {
+        name: Symbol,
+        args: Arc<[InferTy]>,
+    },
+    Opaque(Symbol),
+}
+
+impl InferTy {
+    /// 构造参数化类型应用.
+    pub(crate) fn app(name: Symbol, args: Vec<Self>) -> Self {
+        Self::App {
+            name,
+            args: if args.is_empty() {
+                empty_args()
+            } else {
+                Arc::from(args)
+            },
+        }
+    }
+
+    /// 构造无参数的 Data 类型.
+    pub(crate) fn data(name: Symbol) -> Self {
+        Self::app(name, Vec::new())
+    }
+
+    /// 构造 `List[T]`.
+    pub(crate) fn list(inner: Self) -> Self {
+        Self::app(keywords().list_, vec![inner])
+    }
+
+    /// 构造 `Dict[K, V]`.
+    pub(crate) fn dict(key: Self, value: Self) -> Self {
+        Self::app(crate::symbol::intern("Dict"), vec![key, value])
+    }
+
+    /// 构造 `Set[T]`.
+    pub(crate) fn set(inner: Self) -> Self {
+        Self::app(crate::symbol::intern("Set"), vec![inner])
+    }
+
+    /// 构造 `Pair[A, B]`.
+    pub(crate) fn pair(first: Self, second: Self) -> Self {
+        Self::app(keywords().pair_, vec![first, second])
+    }
+
+    /// 构造 `Option[T]`.
+    pub(crate) fn option(inner: Self) -> Self {
+        Self::app(keywords().option_, vec![inner])
+    }
+
+    /// 构造 `Result[T, E]`.
+    pub(crate) fn result(ok: Self, err: Self) -> Self {
+        Self::app(keywords().result_, vec![ok, err])
+    }
+
+    /// 取出 `List[T]` 的元素类型.
+    pub(crate) fn as_list(&self) -> Option<&Self> {
+        let [inner] = self.app_args(keywords().list_)? else {
+            return None;
+        };
+        Some(inner)
+    }
+
+    /// 取出 `Dict[K, V]` 的键与值类型.
+    pub(crate) fn as_dict(&self) -> Option<(&Self, &Self)> {
+        let [key, value] = self.app_args(crate::symbol::intern("Dict"))? else {
+            return None;
+        };
+        Some((key, value))
+    }
+
+    /// 取出 `Set[T]` 的元素类型.
+    pub(crate) fn as_set(&self) -> Option<&Self> {
+        let [inner] = self.app_args(crate::symbol::intern("Set"))? else {
+            return None;
+        };
+        Some(inner)
+    }
+
+    /// 取出 `Pair[A, B]` 的两个分量.
+    pub(crate) fn as_pair(&self) -> Option<(&Self, &Self)> {
+        let [first, second] = self.app_args(keywords().pair_)? else {
+            return None;
+        };
+        Some((first, second))
+    }
+
+    /// 取出 `Option[T]` 的元素类型.
+    pub(crate) fn as_option(&self) -> Option<&Self> {
+        let [inner] = self.app_args(keywords().option_)? else {
+            return None;
+        };
+        Some(inner)
+    }
+
+    /// 取出 `Result[T, E]` 的成功与错误类型.
+    pub(crate) fn as_result(&self) -> Option<(&Self, &Self)> {
+        let [ok, err] = self.app_args(keywords().result_)? else {
+            return None;
+        };
+        Some((ok, err))
+    }
+
+    /// 是否为 Pid 类型.
+    pub(crate) fn is_pid(&self) -> bool {
+        self.app_args(keywords().pid_)
+            .is_some_and(|args| (2..=17).contains(&args.len()))
+    }
+
+    fn app_args(&self, name: Symbol) -> Option<&[Self]> {
+        match self {
+            Self::App { name: actual, args } if *actual == name => Some(args),
+            _ => None,
+        }
+    }
+}
+
+fn empty_args() -> Arc<[InferTy]> {
+    static EMPTY: LazyLock<Arc<[InferTy]>> = LazyLock::new(|| Arc::from(Vec::new()));
+    Arc::clone(&EMPTY)
 }
 
 // ena 的值槽只用来存变量绑定; 两个已绑定值不会相遇, 因为统一前总会先 shallow.
@@ -82,7 +179,7 @@ impl EqUnifyValue for InferTy {}
 impl InferTy {
     /// 把具体类型包装为推断类型.
     ///
-    /// 穷尽匹配是刻意的: 新增 `Type` 形态时此处必须同步, 避免两套枚举漂移.
+    /// 穷尽匹配; 新增 `Type` 形态时必须同步.
     pub(crate) fn from_concrete(ty: &Type) -> Self {
         match ty {
             Type::I64 => Self::I64,
@@ -94,36 +191,14 @@ impl InferTy {
             Type::Str => Self::Str,
             Type::Nil => Self::Nil,
             Type::Never => Self::Never,
-            Type::List(inner) => Self::List(Box::new(Self::from_concrete(inner))),
-            Type::Dict(key, value) => Self::Dict(
-                Box::new(Self::from_concrete(key)),
-                Box::new(Self::from_concrete(value)),
-            ),
-            Type::Set(inner) => Self::Set(Box::new(Self::from_concrete(inner))),
-            Type::Pair(first, second) => Self::Pair(
-                Box::new(Self::from_concrete(first)),
-                Box::new(Self::from_concrete(second)),
-            ),
-            Type::OptionT(inner) => Self::OptionT(Box::new(Self::from_concrete(inner))),
-            Type::ResultT(ok, err) => Self::ResultT(
-                Box::new(Self::from_concrete(ok)),
-                Box::new(Self::from_concrete(err)),
-            ),
-            Type::PidT(pid) => Self::PidT(Box::new(PidInferType {
-                mailboxes: pid.mailboxes.iter().map(Self::from_concrete).collect(),
-                ret: Box::new(Self::from_concrete(pid.ret.as_ref())),
-            })),
-            Type::HandlerT(handler) => Self::HandlerT(Box::new(HandlerInferType {
-                pid: Box::new(Self::from_concrete(handler.pid.as_ref())),
-                args: handler.args.iter().map(Self::from_concrete).collect(),
-            })),
             Type::Fn(params, ret) => Self::Fn(
                 params.iter().map(Self::from_concrete).collect(),
                 Box::new(Self::from_concrete(ret)),
             ),
-            Type::Data(name) => Self::Data(*name),
-            Type::File => Self::File,
-            Type::DateTime => Self::DateTime,
+            Type::App { name, args } => {
+                Self::app(*name, args.iter().map(Self::from_concrete).collect())
+            },
+            Type::Opaque(name) => Self::Opaque(*name),
         }
     }
 }
@@ -185,41 +260,17 @@ impl InferCtx {
                 Ok(())
             },
             (InferTy::Var(var), ty) | (ty, InferTy::Var(var)) => self.bind(var, &ty, span),
-            (InferTy::List(a), InferTy::List(b))
-            | (InferTy::Set(a), InferTy::Set(b))
-            | (InferTy::OptionT(a), InferTy::OptionT(b)) => self.unify(&a, &b, span),
-            (InferTy::Dict(ak, av), InferTy::Dict(bk, bv)) => {
-                self.unify(&ak, &bk, span)?;
-                self.unify(&av, &bv, span)
-            },
-            (InferTy::Pair(a1, a2), InferTy::Pair(b1, b2))
-            | (InferTy::ResultT(a1, a2), InferTy::ResultT(b1, b2)) => {
-                self.unify(&a1, &b1, span)?;
-                self.unify(&a2, &b2, span)
-            },
-            (InferTy::PidT(a), InferTy::PidT(b)) => {
-                if a.mailboxes.len() != b.mailboxes.len() {
-                    return Err(self.mismatch_error(
-                        &InferTy::PidT(a),
-                        &InferTy::PidT(b),
-                        span,
-                    ));
-                }
-                for (left, right) in a.mailboxes.iter().zip(&b.mailboxes) {
-                    self.unify(left, right, span)?;
-                }
-                self.unify(&a.ret, &b.ret, span)
-            },
-            (InferTy::HandlerT(a), InferTy::HandlerT(b)) => {
-                self.unify(&a.pid, &b.pid, span)?;
-                if a.args.len() != b.args.len() {
-                    return Err(self.mismatch_error(
-                        &InferTy::HandlerT(a),
-                        &InferTy::HandlerT(b),
-                        span,
-                    ));
-                }
-                for (left, right) in a.args.iter().zip(&b.args) {
+            (
+                InferTy::App {
+                    name: a_name,
+                    args: a_args,
+                },
+                InferTy::App {
+                    name: b_name,
+                    args: b_args,
+                },
+            ) if a_name == b_name && a_args.len() == b_args.len() => {
+                for (left, right) in a_args.iter().zip(b_args.iter()) {
                     self.unify(left, right, span)?;
                 }
                 Ok(())
@@ -257,43 +308,18 @@ impl InferCtx {
                     info.span,
                 ))
             },
-            InferTy::List(inner) => Ok(Type::List(Box::new(self.finalize(&inner)?))),
-            InferTy::Dict(key, value) => Ok(Type::Dict(
-                Box::new(self.finalize(&key)?),
-                Box::new(self.finalize(&value)?),
-            )),
-            InferTy::Set(inner) => Ok(Type::Set(Box::new(self.finalize(&inner)?))),
-            InferTy::Pair(first, second) => Ok(Type::Pair(
-                Box::new(self.finalize(&first)?),
-                Box::new(self.finalize(&second)?),
-            )),
-            InferTy::OptionT(inner) => Ok(Type::OptionT(Box::new(self.finalize(&inner)?))),
-            InferTy::ResultT(ok, err) => Ok(Type::ResultT(
-                Box::new(self.finalize(&ok)?),
-                Box::new(self.finalize(&err)?),
-            )),
-            InferTy::PidT(pid) => Ok(Type::PidT(Box::new(PidType {
-                mailboxes: pid
-                    .mailboxes
-                    .iter()
-                    .map(|mailbox| self.finalize(mailbox))
-                    .collect::<Result<_, _>>()?,
-                ret: Box::new(self.finalize(&pid.ret)?),
-            }))),
-            InferTy::HandlerT(handler) => Ok(Type::HandlerT(Box::new(HandlerType {
-                pid: Box::new(self.finalize(&handler.pid)?),
-                args: handler
-                    .args
-                    .iter()
-                    .map(|arg| self.finalize(arg))
-                    .collect::<Result<_, _>>()?,
-            }))),
             InferTy::Fn(params, ret) => Ok(Type::Fn(
                 params
                     .iter()
                     .map(|param| self.finalize(param))
                     .collect::<Result<_, _>>()?,
                 Box::new(self.finalize(&ret)?),
+            )),
+            InferTy::App { name, args } => Ok(Type::app(
+                name,
+                args.iter()
+                    .map(|arg| self.finalize(arg))
+                    .collect::<Result<_, _>>()?,
             )),
             InferTy::I64 => Ok(Type::I64),
             InferTy::U8 => Ok(Type::U8),
@@ -304,9 +330,7 @@ impl InferCtx {
             InferTy::Str => Ok(Type::Str),
             InferTy::Nil => Ok(Type::Nil),
             InferTy::Never => Ok(Type::Never),
-            InferTy::Data(name) => Ok(Type::Data(name)),
-            InferTy::File => Ok(Type::File),
-            InferTy::DateTime => Ok(Type::DateTime),
+            InferTy::Opaque(name) => Ok(Type::opaque(name)),
         }
     }
 
@@ -323,33 +347,6 @@ impl InferCtx {
             InferTy::Str => "string".to_string(),
             InferTy::Nil => "nil".to_string(),
             InferTy::Never => "never".to_string(),
-            InferTy::List(inner) => format!("List[{}]", self.render(&inner)),
-            InferTy::Dict(key, value) => {
-                format!("Dict[{}, {}]", self.render(&key), self.render(&value))
-            },
-            InferTy::Set(inner) => format!("Set[{}]", self.render(&inner)),
-            InferTy::Pair(first, second) => {
-                format!("Pair[{}, {}]", self.render(&first), self.render(&second))
-            },
-            InferTy::OptionT(inner) => format!("Option[{}]", self.render(&inner)),
-            InferTy::ResultT(ok, err) => {
-                format!("Result[{}, {}]", self.render(&ok), self.render(&err))
-            },
-            InferTy::PidT(pid) => {
-                let mut args: Vec<String> = pid
-                    .mailboxes
-                    .iter()
-                    .map(|mailbox| self.render(mailbox))
-                    .collect();
-                args.push(self.render(&pid.ret));
-                format!("Pid[{}]", args.join(", "))
-            },
-            InferTy::HandlerT(handler) => {
-                let mut args = Vec::with_capacity(handler.args.len() + 1);
-                args.push(self.render(&handler.pid));
-                args.extend(handler.args.iter().map(|arg| self.render(arg)));
-                format!("Handler[{}]", args.join(", "))
-            },
             InferTy::Fn(params, ret) => {
                 let params = params
                     .iter()
@@ -358,9 +355,20 @@ impl InferCtx {
                     .join(", ");
                 format!("Fn[[{params}] : {}]", self.render(&ret))
             },
-            InferTy::Data(name) => resolve(name).to_string(),
-            InferTy::File => "File".to_string(),
-            InferTy::DateTime => "DateTime".to_string(),
+            InferTy::App { name, args } => {
+                let name = resolve(name);
+                let args = args
+                    .iter()
+                    .map(|arg| self.render(arg))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if args.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{name}[{args}]")
+                }
+            },
+            InferTy::Opaque(name) => resolve(name).to_string(),
         }
     }
 
@@ -395,23 +403,7 @@ impl InferCtx {
     fn has_unresolved(&mut self, ty: &InferTy) -> bool {
         match self.shallow(ty) {
             InferTy::Var(_) => true,
-            InferTy::List(inner) | InferTy::Set(inner) | InferTy::OptionT(inner) => {
-                self.has_unresolved(&inner)
-            },
-            InferTy::Dict(key, value) => {
-                self.has_unresolved(&key) || self.has_unresolved(&value)
-            },
-            InferTy::Pair(first, second) | InferTy::ResultT(first, second) => {
-                self.has_unresolved(&first) || self.has_unresolved(&second)
-            },
-            InferTy::PidT(pid) => {
-                pid.mailboxes.iter().any(|mailbox| self.has_unresolved(mailbox))
-                    || self.has_unresolved(&pid.ret)
-            },
-            InferTy::HandlerT(handler) => {
-                self.has_unresolved(&handler.pid)
-                    || handler.args.iter().any(|arg| self.has_unresolved(arg))
-            },
+            InferTy::App { args, .. } => args.iter().any(|arg| self.has_unresolved(arg)),
             InferTy::Fn(params, ret) => {
                 params.iter().any(|param| self.has_unresolved(param))
                     || self.has_unresolved(&ret)
@@ -439,21 +431,7 @@ impl InferCtx {
     fn occurs(&mut self, var: VarId, ty: &InferTy) -> bool {
         match self.shallow(ty) {
             InferTy::Var(other) => self.table.find(var) == self.table.find(other),
-            InferTy::List(inner) | InferTy::Set(inner) | InferTy::OptionT(inner) => {
-                self.occurs(var, &inner)
-            },
-            InferTy::Dict(key, value) => self.occurs(var, &key) || self.occurs(var, &value),
-            InferTy::Pair(first, second) | InferTy::ResultT(first, second) => {
-                self.occurs(var, &first) || self.occurs(var, &second)
-            },
-            InferTy::PidT(pid) => {
-                pid.mailboxes.iter().any(|mailbox| self.occurs(var, mailbox))
-                    || self.occurs(var, &pid.ret)
-            },
-            InferTy::HandlerT(handler) => {
-                self.occurs(var, &handler.pid)
-                    || handler.args.iter().any(|arg| self.occurs(var, arg))
-            },
+            InferTy::App { args, .. } => args.iter().any(|arg| self.occurs(var, arg)),
             InferTy::Fn(params, ret) => {
                 params.iter().any(|param| self.occurs(var, param)) || self.occurs(var, &ret)
             },

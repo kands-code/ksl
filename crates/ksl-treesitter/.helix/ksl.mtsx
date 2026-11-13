@@ -74,8 +74,9 @@
             // BEGIN special forms
             "Assert Block CancelTimer Continue Data Def Dict Exit"
             "Export Fix Fn Halt Handler If Join Kill"
-            "Let Match Monitor Panic PidSerial Receive Send Set"
-            "SetTimer Sleep Spawn SpawnDetached Todo Unmonitor Unreachable Use"
+            "Let Main Match Monitor Panic PidSerial Receive Send"
+            "Set SetTimer Sleep Spawn SpawnDetached Todo Unmonitor Unreachable"
+            "Use"
             // END special forms
         ), 0: "keyword"}
 
@@ -101,25 +102,28 @@
             "AddMonth AddSecond AddU64 AddU8 AddWeek AddYear And AppendFile"
             "AppendFileBytes ArcCos ArcCosh ArcSin ArcSinh ArcTan ArcTan2 ArcTanh"
             "Args BitAndI64 BitAndU64 BitAndU8 BitOrI64 BitOrU64 BitOrU8 BitReverseI64"
-            "BitReverseU64 BitReverseU8 BitXorI64 BitXorU64 BitXorU8 Ceiling CharToI64 CharsToString"
-            "Close ClosedFile CopyFile Cos Cosh CreateDirectory CreateDirectoryAll DateTimeToEpochMillis"
-            "DecodeUtf8 DivideF64 DivideI64 DivideU64 DivideU8 EncodeUtf8 EpochMillisToDateTime EqualBool"
-            "EqualChar EqualDateTime EqualF64 EqualI64 EqualString EqualU64 EqualU8 Floor"
-            "Flush GetCurrentDirectory GetEnv GreaterF64 GreaterI64 GreaterOrEqualF64 GreaterOrEqualI64 GreaterOrEqualU64"
-            "GreaterOrEqualU8 GreaterU64 GreaterU8 I64ToChar I64ToF64 I64ToU64 I64ToU8 IsDirectory"
-            "IsFile IsPathExists JoinPath LessDateTime LessF64 LessI64 LessOrEqualF64 LessOrEqualI64"
-            "LessOrEqualU64 LessOrEqualU8 LessU64 LessU8 ListDirectory ModuloI64 ModuloU64 ModuloU8"
-            "MulF64 MulI64 MulU64 MulU8 Not Now NowUtc OpenAppend"
-            "OpenRead OpenWrite Or ParseDateTime ParseF64 ParseI64 ParseU64 Power"
-            "Print PrintError PrintRaw QuotientI64 ReadChunk ReadFile ReadFileBytes ReadKey"
-            "ReadLine ReadLineFrom RemainderI64 RemoveDirectory RemoveFile RenamePath Round ShiftLeftI64"
-            "ShiftLeftU64 ShiftLeftU8 ShiftRightI64 ShiftRightU64 ShiftRightU8 Sin Sinh Sqrt"
-            "StringContains StringEndsWith StringJoin StringLength StringLines StringLowercase StringSplit StringStartsWith"
-            "StringToChars StringTrim StringTrimEnd StringTrimStart StringUppercase StringWords SubDay SubF64"
-            "SubHour SubI64 SubMillisecond SubMinute SubMonth SubSecond SubU64 SubU8"
-            "SubWeek SubYear Tan Tanh TimeDay TimeFromParts TimeHour TimeInZone"
-            "TimeMillisecond TimeMinute TimeMonth TimeSecond TimeToString TimeWeekday TimeYear TimeZoneName"
-            "TimeZoneOffsetMinutes Truncate U64ToF64 U64ToI64 U64ToU8 U8ToI64 U8ToU64 WriteBytes"
+            "BitReverseU64 BitReverseU8 BitXorI64 BitXorU64 BitXorU8 Ceiling CharToU64 CharsToString"
+            "Close ClosedFile CopyFile Cos Cosh CreateDirectory CreateDirectoryAll DateDay"
+            "DateMonth DateTimeFromParts DateTimeInZone DateTimeToEpochMillis DateTimeToString DateWeekday DateYear DecodeUtf8"
+            "DivideF64 DivideI64 DivideU64 DivideU8 EncodeUtf8 EpochMillisToDateTime EqualBool EqualChar"
+            "EqualDateTime EqualF64 EqualI64 EqualString EqualU64 EqualU8 Floor Flush"
+            "GetCurrentDirectory GetEnv GreaterDateTime GreaterF64 GreaterI64 GreaterOrEqualDateTime GreaterOrEqualF64 GreaterOrEqualI64"
+            "GreaterOrEqualU64 GreaterOrEqualU8 GreaterU64 GreaterU8 I64ToF64 I64ToU64 I64ToU8 IsAlphanumeric"
+            "IsAsciiDigit IsDirectory IsFile IsLetter IsLowercase IsPathExists IsUppercase IsWhitespace"
+            "JoinPath LessDateTime LessF64 LessI64 LessOrEqualDateTime LessOrEqualF64 LessOrEqualI64 LessOrEqualU64"
+            "LessOrEqualU8 LessU64 LessU8 ListDirectory ModuloI64 ModuloU64 ModuloU8 MulF64"
+            "MulI64 MulU64 MulU8 Not Now NowUtc OpenAppend OpenRead"
+            "OpenWrite Or ParseDateTime ParseF64 ParseI64 ParseU64 Power Print"
+            "PrintError PrintRaw QuotientI64 ReadChunk ReadFile ReadFileBytes ReadKey ReadLine"
+            "ReadLineFrom ReadLinePlain RemainderI64 RemoveDirectory RemoveFile RenamePath Round ShiftLeftI64"
+            "ShiftLeftU64 ShiftLeftU8 ShiftRightI64 ShiftRightU64 ShiftRightU8 Sin Sinh SocketClose"
+            "SocketPeer SocketRead SocketReadAll SocketReadExact SocketReadLine SocketWrite SocketWriteAll SocketWriteLine"
+            "Sqrt StringContains StringEndsWith StringJoin StringLength StringLines StringLowercase StringSplit"
+            "StringStartsWith StringToChars StringTrim StringTrimEnd StringTrimStart StringUppercase StringWords SubDay"
+            "SubF64 SubHour SubI64 SubMillisecond SubMinute SubMonth SubSecond SubU64"
+            "SubU8 SubWeek SubYear Tan Tanh TcpAccept TcpCloseListener TcpConnect"
+            "TcpListen TcpLocalPort TimeHour TimeMillisecond TimeMinute TimeSecond TimeZoneName TimeZoneOffsetMinutes"
+            "Truncate U64ToChar U64ToF64 U64ToI64 U64ToU8 U8ToI64 U8ToU64 WriteBytes"
             "WriteFile WriteFileBytes WriteString"
             // END builtins
         ), 0: "label"}
@@ -127,9 +131,10 @@
         // 内置类型.
         {match: keywordsToRegex(
             // BEGIN types
-            "DateTime Dict ExitReason File Handler IOError KeyEvent List"
-            "Option Pair Pid Result Set TimeError bool char"
-            "f64 i64 string u64 u8"
+            "DateTime Dict ExitReason File Handler IOError IORequest KeyEvent"
+            "List Option Pair Pid Result Set Socket SocketError"
+            "TcpListener TimeError bool char f64 i64 string u64"
+            "u8"
             // END types
         ), 0: "type"
         }

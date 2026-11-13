@@ -185,6 +185,8 @@ fn run_file(file: &Path, args: Vec<String>) -> ExitCode {
 }
 
 /// 执行命令行代码段.
+///
+/// 代码段不是模块, 不能使用 Actor 原语.
 fn run_code(code: &str, args: Vec<String>) -> ExitCode {
     let mut host = Host::in_current_dir();
     host.set_args(args);

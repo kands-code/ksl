@@ -47,13 +47,13 @@ cargo test -p ksl-treesitter
 ```bash
 scripts/gen-builtins.sh   # 生成 Helix 内置函数名单
 scripts/gen-mtsx.sh       # 生成 MT 语法名单
-scripts/install-helix.sh  # 编译并安装 Helix 运行期文件
+scripts/install-helix.sh  # 编译并安装 Helix 运行时文件
 ```
 
 ## 编辑器
 
 Helix: `.helix/languages.toml` 登记语言; 运行 `scripts/install-helix.sh` 安装
-运行期文件, 然后从 crate 目录启动:
+运行时文件, 然后从 crate 目录启动:
 
 ```bash
 cd crates/ksl-treesitter && hx test/drift/tour.ksl

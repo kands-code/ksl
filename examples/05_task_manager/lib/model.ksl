@@ -44,25 +44,26 @@
     ])
   }]];
 
+@Def[parseId, [text : string] : Option[i64],
+  @Match[ParseI64[text], {
+    (Result/Ok[id], Option/Some[id]),
+    (Result/Err[_], Option/None[])
+  }]];
+
 @Def[parseTask, [line : string] : Option[Task],
   @Block[
     @Let[fields, StringSplit[line, "|"]],
     @If[EqualU64[@ListLength[fields], 4U],
-      @Block[
-        @Let[idResult, ParseI64[@ListGet[fields, 0U]]],
-        @Let[priorityResult, ParseI64[@ListGet[fields, 2U]]],
-        @Match[idResult, {
-          (Result/Ok[id], @Match[priorityResult, {
-            (Result/Ok[priority], Option/Some[Task/Item[
-              id,
-              @ListGet[fields, 3U],
-              priority,
-              parseStatus[@ListGet[fields, 1U]]
-            ]]),
-            (Result/Err[_], Option/None[])
-          }]),
-          (Result/Err[_], Option/None[])
-        }]
+      @OptionAndThen[
+        parseId[@ListGet[fields, 0U]],
+        @Fn[[id : i64] : Option[Task],
+          @OptionMap[
+            parseId[@ListGet[fields, 2U]],
+            @Fn[[priority : i64] : Task,
+              Task/Item[id, @ListGet[fields, 3U], priority, parseStatus[@ListGet[fields, 1U]]]
+            ]
+          ]
+        ]
       ],
       Option/None[]
     ]
@@ -151,33 +152,29 @@
     (_, "I/O error")
   }]];
 
-@Def[parseId, [text : string] : Option[i64],
-  @Match[ParseI64[text], {
-    (Result/Ok[id], Option/Some[id]),
-    (Result/Err[_], Option/None[])
-  }]];
-
 @Def[parseAdd, [words : List[string]] : Option[Request],
   @If[LessU64[@ListLength[words], 3U],
     Option/None[],
-    @Match[parseId[@ListGet[words, 1U]], {
-      (Option/Some[priority], @Block[
-        @Let[title, StringJoin[@ListRiffle[@ListDrop[words, 2U], " ", 1U]]],
-        Option/Some[Request/AddTask[title, priority]]
-      ]),
-      (Option/None[], Option/None[])
-    }]
+    @OptionMap[
+      parseId[@ListGet[words, 1U]],
+      @Fn[[priority : i64] : Request,
+        @Block[
+          @Let[title, StringJoin[@ListRiffle[@ListDrop[words, 2U], " ", 1U]]],
+          Request/AddTask[title, priority]
+        ]
+      ]
+    ]
   ]];
 
 @Def[parseIdRequest, [words : List[string], kind : string] : Option[Request],
   @If[LessU64[@ListLength[words], 2U],
     Option/None[],
-    @Match[parseId[@ListGet[words, 1U]], {
-      (Option/Some[id], Option/Some[
+    @OptionMap[
+      parseId[@ListGet[words, 1U]],
+      @Fn[[id : i64] : Request,
         @If[EqualString[kind, "done"], Request/CompleteTask[id], Request/RemoveTask[id]]
-      ]),
-      (Option/None[], Option/None[])
-    }]
+      ]
+    ]
   ]];
 
 @Def[dispatchRemove, [head : string, words : List[string]] : Option[Request],

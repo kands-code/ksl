@@ -1,157 +1,161 @@
 # @run
 # 监视: 失败重启, 目标已终止, 监视自身, 取消监视, 非登记者取消, 有限超时轮询.
 # 信箱布局: 数据从 0 开始, 监视通知投递到最后一个信箱.
-@Block[
-  @Let[restart, @Block[
-    @Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64,
-      @If[EqualI64[n, 0], 42, DivideI64[1, 0]]]],
-    @Let[supervisor, @Handler[
-      [self : Pid[i64, Pair[u64, ExitReason], i64], attempt : i64] : i64,
-      @Block[
-        @Let[child, @Spawn[1u, worker, SubI64[attempt, 1]]],
-        @Let[mon, @Monitor[child]],
-        @Match[mon, {
-          (/Some[id], @Match[@Receive[1u, Option/None[]], {
-            (/Some[notice], @Match[@Snd[notice], {
-              (/Halted[], @Match[@Join[child], { (/Ok[v], v), (/Err[e], -1) }]),
-              (/Killed[], -2),
-              (/Failed[code, message],
-                @If[EqualI64[attempt, 1], -3, @Continue[SubI64[attempt, 1]]])
-            }]),
-            (/None[], -4)
-          }]),
-          (/None[], -5)
-        }]
-      ]]],
-    @Let[p, @Spawn[2u, supervisor, 3]],
-    @Match[@Join[p], { (/Ok[v], v), (/Err[e], -6) }]
-  ]],
-  @Assert[EqualI64[restart, 42], "失败后重启并成功"],
 
-  @Let[dead, @Block[
-    @Let[worker, @Handler[[self : Pid[i64, i64]] : i64, 7]],
-    @Let[supervisor, @Handler[
-      [self : Pid[Pair[u64, ExitReason], i64], dead : Pid[i64, i64]] : i64,
-      @Block[
-        @Let[mon, @Monitor[dead]],
-        @Match[mon, {
-          (/Some[id], @Match[@Receive[0u, Option/None[]], {
-            (/Some[notice], @Match[@Snd[notice], {
-              (/Halted[], @Match[@Join[dead], { (/Ok[v], v), (/Err[e], -1) }]),
-              (/Killed[], -2),
-              (/Failed[code, message], -3)
-            }]),
-            (/None[], -4)
-          }]),
-          (/None[], -5)
-        }]
-      ]]],
-    @Let[p, @Spawn[1u, worker]],
-    @Let[joined, @Join[p]],
-    @Let[s, @Spawn[1u, supervisor, p]],
-    @Match[@Join[s], { (/Ok[v], v), (/Err[e], -6) }]
-  ]],
-  @Assert[EqualI64[dead, 7], "监视已终止目标立即投递"],
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Block[
+      @Let[restart, @Block[
+        @Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+          @If[EqualI64[n, 0], 42, DivideI64[1, 0]]]],
+        @Let[supervisor, @Handler[
+          [self : Pid[i64, Pair[u64, ExitReason], i64], attempt : i64] : i64,
+          @Block[
+            @Let[child, @Spawn[worker, SubI64[attempt, 1]]],
+            @Let[mon, @Monitor[child]],
+            @Match[mon, {
+              (/Some[id], @Match[@Receive[1u, Option/None[]], {
+                (/Some[notice], @Match[@Snd[notice], {
+                  (/Halted[], @Match[@Join[child], { (/Ok[v], v), (/Err[e], -1) }]),
+                  (/Killed[], -2),
+                  (/Failed[code, message],
+                    @If[EqualI64[attempt, 1], -3, @Continue[SubI64[attempt, 1]]])
+                }]),
+                (/None[], -4)
+              }]),
+              (/None[], -5)
+            }]
+          ]]],
+        @Let[p, @Spawn[supervisor, 3]],
+        @Match[@Join[p], { (/Ok[v], v), (/Err[e], -6) }]
+      ]],
+      @Assert[EqualI64[restart, 42], "失败后重启并成功"],
 
-  @Let[self_ok, @Block[
-    @Let[supervisor, @Handler[
-      [self : Pid[Pair[u64, ExitReason], bool]] : bool,
-      @Match[@Monitor[self], {
-        (/Some[id], false),
-        (/None[], true)
-      }]]],
-    @Let[p, @Spawn[1u, supervisor]],
-    @Match[@Join[p], { (/Ok[v], v), (/Err[e], false) }]
-  ]],
-  @Assert[self_ok, "监视自身返回 None"],
+      @Let[dead, @Block[
+        @Let[worker, @Handler[[self : Pid[i64, i64]] : i64, 7]],
+        @Let[supervisor, @Handler[
+          [self : Pid[Pair[u64, ExitReason], i64], dead : Pid[i64, i64]] : i64,
+          @Block[
+            @Let[mon, @Monitor[dead]],
+            @Match[mon, {
+              (/Some[id], @Match[@Receive[0u, Option/None[]], {
+                (/Some[notice], @Match[@Snd[notice], {
+                  (/Halted[], @Match[@Join[dead], { (/Ok[v], v), (/Err[e], -1) }]),
+                  (/Killed[], -2),
+                  (/Failed[code, message], -3)
+                }]),
+                (/None[], -4)
+              }]),
+              (/None[], -5)
+            }]
+          ]]],
+        @Let[p, @Spawn[worker]],
+        @Let[joined, @Join[p]],
+        @Let[s, @Spawn[supervisor, p]],
+        @Match[@Join[s], { (/Ok[v], v), (/Err[e], -6) }]
+      ]],
+      @Assert[EqualI64[dead, 7], "监视已终止目标立即投递"],
 
-  @Let[unmonitor_ok, @Block[
-    @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
-      @Match[@Receive[0u, Option/None[]], {
-        (/Some[x], x),
-        (/None[], 7)
-      }]]],
-    @Let[supervisor, @Handler[
-      [self : Pid[i64, Pair[u64, ExitReason], bool]] : bool,
-      @Block[
-        @Let[child, @Spawn[1u, worker]],
-        @Let[mon, @Monitor[child]],
-        @Match[mon, {
-          (/Some[id], @Block[
-            @Let[removed, @Unmonitor[id]],
-            @Let[again, @Unmonitor[id]],
-            @Let[killed, @Kill[child]],
-            @Let[notice, @Receive[1u, Option/Some[30U]]],
-            @Match[notice, {
-              (/Some[n], false),
-              (/None[], And[removed, Not[again]])
+      @Let[self_ok, @Block[
+        @Let[supervisor, @Handler[
+          [self : Pid[Pair[u64, ExitReason], bool]] : bool,
+          @Match[@Monitor[self], {
+            (/Some[id], false),
+            (/None[], true)
+          }]]],
+        @Let[p, @Spawn[supervisor]],
+        @Match[@Join[p], { (/Ok[v], v), (/Err[e], false) }]
+      ]],
+      @Assert[self_ok, "监视自身返回 None"],
+
+      @Let[unmonitor_ok, @Block[
+        @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
+          @Match[@Receive[0u, Option/None[]], {
+            (/Some[x], x),
+            (/None[], 7)
+          }]]],
+        @Let[supervisor, @Handler[
+          [self : Pid[i64, Pair[u64, ExitReason], bool]] : bool,
+          @Block[
+            @Let[child, @Spawn[worker]],
+            @Let[mon, @Monitor[child]],
+            @Match[mon, {
+              (/Some[id], @Block[
+                @Let[removed, @Unmonitor[id]],
+                @Let[again, @Unmonitor[id]],
+                @Let[killed, @Kill[child]],
+                @Let[notice, @Receive[1u, Option/Some[30U]]],
+                @Match[notice, {
+                  (/Some[n], false),
+                  (/None[], And[removed, Not[again]])
+                }]
+              ]),
+              (/None[], false)
+            }]
+          ]]],
+        @Let[p, @Spawn[supervisor]],
+        @Match[@Join[p], { (/Ok[v], v), (/Err[e], false) }]
+      ]],
+      @Assert[unmonitor_ok, "取消监视后不再收到通知"],
+
+      @Let[owner_ok, @Block[
+        @Let[target, @Handler[[self : Pid[i64, i64]] : i64,
+          @Match[@Receive[0u, Option/None[]], {
+            (/Some[n], n),
+            (/None[], 0)
+          }]]],
+        @Let[thief, @Handler[[self : Pid[i64, bool], id : u64] : bool,
+          @Unmonitor[id]]],
+        @Let[supervisor, @Handler[
+          [self : Pid[Pair[u64, ExitReason], bool], t : Pid[i64, i64]] : bool,
+          @Block[
+            @Let[m, @Monitor[t]],
+            @Match[m, {
+              (/Some[id], @Block[
+                @Let[th, @Spawn[thief, id]],
+                @Let[stolen, @Match[@Join[th], { (/Ok[v], v), (/Err[e], true) }]],
+                @Let[killed, @Kill[t]],
+                @Let[notice, @Receive[0u, Option/Some[20U]]],
+                And[Not[stolen], @Match[notice, {
+                  (/Some[n], true),
+                  (/None[], false)
+                }]]
+              ]),
+              (/None[], false)
+            }]
+          ]]],
+        @Let[t, @Spawn[target]],
+        @Let[s, @Spawn[supervisor, t]],
+        @Match[@Join[s], { (/Ok[v], v), (/Err[e], false) }]
+      ]],
+      @Assert[owner_ok, "非登记者不能取消监视"]
+    ],
+
+    @Let[polled, @Block[
+      @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
+        @Block[@Sleep[20U], 9]]],
+      @Let[supervisor, @Handler[
+        [self : Pid[i64, Pair[u64, ExitReason], i64],
+         child_opt : Option[Pid[i64, i64]], mon : u64] : i64,
+        @Match[child_opt, {
+          (/None[], @Block[
+            @Let[child, @Spawn[worker]],
+            @Let[m, @Monitor[child]],
+            @Match[m, {
+              (/Some[id], @Continue[Option/Some[child], id]),
+              (/None[], -1)
             }]
           ]),
-          (/None[], false)
-        }]
-      ]]],
-    @Let[p, @Spawn[2u, supervisor]],
-    @Match[@Join[p], { (/Ok[v], v), (/Err[e], false) }]
-  ]],
-  @Assert[unmonitor_ok, "取消监视后不再收到通知"],
-
-  @Let[owner_ok, @Block[
-    @Let[target, @Handler[[self : Pid[i64, i64]] : i64,
-      @Match[@Receive[0u, Option/None[]], {
-        (/Some[n], n),
-        (/None[], 0)
-      }]]],
-    @Let[thief, @Handler[[self : Pid[i64, bool], id : u64] : bool,
-      @Unmonitor[id]]],
-    @Let[supervisor, @Handler[
-      [self : Pid[Pair[u64, ExitReason], bool], t : Pid[i64, i64]] : bool,
-      @Block[
-        @Let[m, @Monitor[t]],
-        @Match[m, {
-          (/Some[id], @Block[
-            @Let[th, @Spawn[1u, thief, id]],
-            @Let[stolen, @Match[@Join[th], { (/Ok[v], v), (/Err[e], true) }]],
-            @Let[killed, @Kill[t]],
-            @Let[notice, @Receive[0u, Option/Some[20U]]],
-            And[Not[stolen], @Match[notice, {
-              (/Some[n], true),
-              (/None[], false)
-            }]]
-          ]),
-          (/None[], false)
-        }]
-      ]]],
-    @Let[t, @Spawn[1u, target]],
-    @Let[s, @Spawn[1u, supervisor, t]],
-    @Match[@Join[s], { (/Ok[v], v), (/Err[e], false) }]
-  ]],
-  @Assert[owner_ok, "非登记者不能取消监视"]
-];
-
-@Let[polled, @Block[
-  @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
-    @Block[@Sleep[20U], 9]]],
-  @Let[supervisor, @Handler[
-    [self : Pid[i64, Pair[u64, ExitReason], i64],
-     child_opt : Option[Pid[i64, i64]], mon : u64] : i64,
-    @Match[child_opt, {
-      (/None[], @Block[
-        @Let[child, @Spawn[1u, worker]],
-        @Let[m, @Monitor[child]],
-        @Match[m, {
-          (/Some[id], @Continue[Option/Some[child], id]),
-          (/None[], -1)
-        }]
-      ]),
-      (/Some[child], @Match[@Receive[0u, Option/Some[5U]], {
-        (/Some[x], -2),
-        (/None[], @Match[@Receive[1u, Option/Some[0U]], {
-          (/Some[notice], @Match[@Join[child], { (/Ok[v], v), (/Err[e], -3) }]),
-          (/None[], @Continue[child_opt, mon])
-        }])
-      }])
-    }]]],
-  @Let[p, @Spawn[2u, supervisor, Option/None[], 0U]],
-  @Match[@Join[p], { (/Ok[v], v), (/Err[e], -4) }]
-]];
-@Assert[EqualI64[polled, 9], "阻塞在命令信箱时轮询退出信箱"];
+          (/Some[child], @Match[@Receive[0u, Option/Some[5U]], {
+            (/Some[x], -2),
+            (/None[], @Match[@Receive[1u, Option/Some[0U]], {
+              (/Some[notice], @Match[@Join[child], { (/Ok[v], v), (/Err[e], -3) }]),
+              (/None[], @Continue[child_opt, mon])
+            }])
+          }])
+        }]]],
+      @Let[p, @Spawn[supervisor, Option/None[], 0U]],
+      @Match[@Join[p], { (/Ok[v], v), (/Err[e], -4) }]
+    ]],
+    @Assert[EqualI64[polled, 9], "阻塞在命令信箱时轮询退出信箱"]
+  ]]

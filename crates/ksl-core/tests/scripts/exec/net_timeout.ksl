@@ -1,0 +1,34 @@
+# @run
+# TCP 读超时: 连接建立后没有数据时返回 SocketError/TimedOut.
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[e], @Panic["TcpListen 失败"])
+    }]],
+    @Let[port, TcpLocalPort[listener]],
+    @Let[client, @Handler[[self : Pid[nil, nil], port : u64] : nil,
+      @Block[
+        @Match[TcpConnect["127.0.0.1", port, 1000U], {
+          (/Ok[socket], @Block[
+            @Match[SocketReadLine[socket, 1024U, 50U], {
+              (/Ok[line], @Panic["未写入数据却读到内容"]),
+              (/Err[error], @Match[error, {
+                (/TimedOut[], nil),
+                (_, @Panic["错误类别不是 TimedOut"])
+              }])
+            }],
+            @Let[_closed, SocketClose[socket]],
+            nil
+          ]),
+          (/Err[e], @Panic["TcpConnect 失败"])
+        }]
+      ]]],
+    @Let[client_pid, @Spawn[client, port]],
+    @Match[@Join[client_pid], {
+      (/Ok[_], nil),
+      (/Err[_], @Panic["客户端失败"])
+    }],
+    @Let[_closed, TcpCloseListener[listener]]
+  ]]

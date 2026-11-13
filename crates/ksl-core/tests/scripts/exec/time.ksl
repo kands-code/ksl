@@ -2,32 +2,39 @@
 # 时间字段, 时区, 日历算术, epoch 换算与错误变体.
 @Let[base, @ResultGet[ParseDateTime["2026-03-08T01:30:00[America/New_York]"], Now[]]];
 @Assert[
-  EqualString[TimeToString[AddHour[base, 1U]], "2026-03-08T03:30:00-04:00[America/New_York]"],
+  EqualString[DateTimeToString[AddHour[base, 1U]], "2026-03-08T03:30:00-04:00[America/New_York]"],
   "时长算术跨夏令时"
 ];
 @Assert[
-  EqualString[TimeToString[AddDay[base, 1U]], "2026-03-09T01:30:00-04:00[America/New_York]"],
-  "日历算术保持本地墙上时间"
+  EqualString[DateTimeToString[AddDay[base, 1U]], "2026-03-09T01:30:00-04:00[America/New_York]"],
+  "日历算术保持本地时间"
 ];
 @Assert[EqualDateTime[AddWeek[base, 1U], AddDay[base, 7U]], "周与日等价"];
 
-@Let[parts, @ResultGet[TimeFromParts[2026, 11, 12, 14, 30, 5], Now[]]];
-@Assert[EqualI64[TimeYear[parts], 2026], "年"];
-@Assert[EqualI64[TimeMonth[parts], 11], "月"];
-@Assert[EqualI64[TimeDay[parts], 12], "日"];
+@Let[parts, @ResultGet[DateTimeFromParts[2026, 11, 12, 14, 30, 5], Now[]]];
+@Assert[EqualI64[DateYear[parts], 2026], "年"];
+@Assert[EqualI64[DateMonth[parts], 11], "月"];
+@Assert[EqualI64[DateDay[parts], 12], "日"];
 @Assert[EqualI64[TimeHour[parts], 14], "时"];
 @Assert[EqualI64[TimeMinute[parts], 30], "分"];
 @Assert[EqualI64[TimeSecond[parts], 5], "秒"];
-@Assert[EqualI64[TimeWeekday[parts], 4], "ISO 星期"];
+@Assert[EqualI64[DateWeekday[parts], 4], "ISO 星期"];
 
 @Let[d, @ResultGet[ParseDateTime["2026-07-15T12:00:00[America/New_York]"], Now[]]];
-@Let[utc, @ResultGet[TimeInZone[d, "UTC"], d]];
+@Let[utc, @ResultGet[DateTimeInZone[d, "UTC"], d]];
 @Assert[EqualString[TimeZoneName[d], "America/New_York"], "命名时区"];
 @Assert[EqualString[TimeZoneName[utc], "UTC"], "换时区"];
 @Assert[EqualI64[TimeZoneOffsetMinutes[d], -240], "纽约夏令时偏移"];
 @Assert[EqualI64[TimeHour[d], 12], "字段按自带时区解释"];
 @Assert[EqualI64[TimeZoneOffsetMinutes[utc], 0], "UTC 偏移"];
 @Assert[EqualI64[TimeHour[utc], 16], "换时区不改时刻"];
+
+@Let[same, @ResultGet[ParseDateTime["2026-07-15T16:00:00[UTC]"], d]];
+@Assert[EqualDateTime[d, same], "同一时刻不同显示时区相等"];
+@Assert[LessDateTime[d, AddHour[d, 1U]], "按绝对时刻比较"];
+@Assert[LessOrEqualDateTime[d, same], "小于等于比较"];
+@Assert[GreaterDateTime[AddHour[d, 1U], d], "大于比较"];
+@Assert[GreaterOrEqualDateTime[d, same], "大于等于比较"];
 
 @Let[round, EpochMillisToDateTime[DateTimeToEpochMillis[d]]];
 @Let[epoch, EpochMillisToDateTime[0]];
@@ -40,11 +47,11 @@
   (/Ok[v], 0),
   (/Err[e], @Match[e, { (/InvalidFormat[m], 1), (_, 0) }])
 }]];
-@Let[bad_zone, @Match[TimeInZone[d, "Not/AZone"], {
+@Let[bad_zone, @Match[DateTimeInZone[d, "Not/AZone"], {
   (/Ok[v], 0),
   (/Err[e], @Match[e, { (/UnknownZone[n], 1), (_, 0) }])
 }]];
-@Let[bad_field, @Match[TimeFromParts[2026, 13, 1, 0, 0, 0], {
+@Let[bad_field, @Match[DateTimeFromParts[2026, 13, 1, 0, 0, 0], {
   (/Ok[v], 0),
   (/Err[e], @Match[e, { (/InvalidField[m], 1), (_, 0) }])
 }]];

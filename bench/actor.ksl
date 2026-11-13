@@ -1,46 +1,46 @@
 # Actor 消息与调度的开销.
 #
-# 一个服务方与一个客户端; 客户端发出若干消息后等待汇总结果.
-# 消息逐条入信箱并逐条取出, 覆盖信箱队列与调度器的路径.
+# 服务 Actor 逐条处理 20000 条加法消息, 客户端发送完毕后用 Query 收回结果.
+# 覆盖信箱排队, Handler 自循环与调度器轮转.
 
 @Data[Counter, {
   Add[i64],
   Query[Pid[i64, i64]]
 }];
 
-@Def[send_many, [n : i64, server : Pid[Counter, i64]] : nil,
-  @If[LessOrEqualI64[n, 0], nil, @Block[
-    @Let[sent, @Send[server, 0u, Counter/Add[1]]],
-    send_many[SubI64[n, 1], server]
-  ]]];
-
 @Let[server, @Handler[[self : Pid[Counter, i64], total : i64] : i64,
   @Match[@Receive[0u, Option/None[]], {
     (/Some[message], @Match[message, {
       (/Add[n], @Continue[AddI64[total, n]]),
       (/Query[client], @Block[
-        @Let[sent, @Send[client, 0u, total]],
-        @Continue[total]
+        @Let[_sent, @Send[client, 0u, total]],
+        total
       ])
     }]),
     (/None[], total)
   }]]];
 
-@Let[client, @Handler[[self : Pid[i64, i64], server : Pid[Counter, i64]] : i64,
-  @Block[
-    @Let[bulk, send_many[20000, server]],
-    @Let[asked, @Send[server, 0u, Counter/Query[self]]],
-    @Match[@Receive[0u, Option/None[]], {
-      (/Some[total], total),
-      (/None[], -1)
-    }]
+@Let[client, @Handler[
+  [self : Pid[i64, i64], remaining : i64, server : Pid[Counter, i64]] : i64,
+  @If[LessOrEqualI64[remaining, 0],
+    @Block[
+      @Let[_sent, @Send[server, 0u, Counter/Query[self]]],
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[total], total),
+        (/None[], -1)
+      }]
+    ],
+    @Block[
+      @Let[_sent, @Send[server, 0u, Counter/Add[1]]],
+      @Continue[SubI64[remaining, 1], server]
+    ]
   ]]];
 
-@Let[outcome, @Block[
-  @Let[service, @Spawn[1u, server, 0]],
-  @Let[worker, @Spawn[1u, client, service]],
-  @Match[@Join[worker], { (/Ok[v], v), (/Err[e], -1) }]
-]];
-@Let[result, outcome];
-@Let[printed, Print[f"{result}"]];
-nil
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[service, @Spawn[server, 0]],
+    @Let[worker, @Spawn[client, 20000, service]],
+    @Let[result, @ResultGet[@Join[worker], -1]],
+    @Let[_service_done, @Join[service]],
+    Print[f"{result}"]
+  ]];

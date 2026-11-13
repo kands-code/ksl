@@ -28,12 +28,6 @@
     }]
   ]]];
 
-@Def[ask, [service : Pid[Command, i64], request : Request] : string,
-  @Block[
-    @Let[worker, @Spawn[1u, client, service, request]],
-    @Match[@Join[worker], { (/Ok[text], text), (/Err[_], "client failed") }]
-  ]];
-
 @Def[handle, [request : Request, tasks : List[Task], path : string] : Pair[List[Task], string],
   @Match[request, {
     (Request/ListTasks[], (tasks, formatList[tasks])),
@@ -76,43 +70,45 @@
     (/None[], 0)
   }]]];
 
-@Def[loop, [service_pid : Pid[Command, i64]] : nil,
-  @Block[
-    @Match[ReadLine["> "], {
-      (Result/Ok[lineOpt], @Match[lineOpt, {
-        (Option/Some[line], @Block[
-          @If[EqualString[line, "quit"],
-            nil,
-            @Block[
-              @Match[parseRequest[line], {
-                (Option/Some[request], @Block[
-                  @Let[answer, ask[service_pid, request]],
-                  Print[answer],
-                  loop[service_pid]
-                ]),
-                (Option/None[], @Block[
-                  Print["unknown command"],
-                  loop[service_pid]
-                ])
-              }]
-            ]]
-        ]),
-        (Option/None[], nil)
-      }]),
-      (Result/Err[error], Print[formatError[error]])
-    }]
-  ]];
+@Let[loop, @Handler[
+  [self : Pid[nil, nil], service_pid : Pid[Command, i64]] : nil,
+  @Match[ReadLine["> "], {
+    (Result/Ok[lineOpt], @Match[lineOpt, {
+      (Option/Some[line], @Block[
+        @If[EqualString[line, "quit"],
+          nil,
+          @Block[
+            @Match[parseRequest[line], {
+              (Option/Some[request], @Block[
+                @Let[worker, @Spawn[client, service_pid, request]],
+                @Let[answer, @ResultGet[@Join[worker], "client failed"]],
+                Print[answer],
+                @Continue[service_pid]
+              ]),
+              (Option/None[], @Block[
+                Print["unknown command"],
+                @Continue[service_pid]
+              ])
+            }]
+          ]]
+      ]),
+      (Option/None[], nil)
+    }]),
+    (Result/Err[error], Print[formatError[error]])
+  }]]];
 
-@Match[load["tasks.txt"], {
-  (Result/Ok[tasks], @Block[
-    @Let[service_pid, @Spawn[1u, service, tasks, "tasks.txt"]],
-    @Let[registered, @Register["task-service", service_pid]],
-    @Let[ready, registered],
-    Print[f"task service ready: registered={ready}"],
-    Print["commands: list, stats, add <priority> <title>, done <id>, remove <id>, quit"],
-    loop[service_pid],
-    @Let[killed, @Kill[service_pid]],
-    Print["bye"]
-  ]),
-  (Result/Err[error], Print[formatError[error]])
-}]
+@Main[[self : Pid[nil, nil]] : nil,
+  @Match[load["tasks.txt"], {
+    (Result/Ok[tasks], @Block[
+      @Let[service_pid, @Spawn[service, tasks, "tasks.txt"]],
+      @Let[registered, @Register["task-service", service_pid]],
+      @Let[ready, registered],
+      Print[f"task service ready: registered={ready}"],
+      Print["commands: list, stats, add <priority> <title>, done <id>, remove <id>, quit"],
+      @Let[loop_pid, @Spawn[loop, service_pid]],
+      @Let[_joined, @Join[loop_pid]],
+      @Let[killed, @Kill[service_pid]],
+      Print["bye"]
+    ]),
+    (Result/Err[error], Print[formatError[error]])
+  }]]

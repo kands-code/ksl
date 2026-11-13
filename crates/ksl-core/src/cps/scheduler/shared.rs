@@ -1,25 +1,31 @@
 //! 调度器共享状态.
 //!
-//! 命名注册, 监视, 定时器与 I/O 提交都在共享状态上完成; 调度器循环通过
-//! 同一个共享句柄唤醒任务. 本模块只处理跨任务可见的数据, 不推进抽象机.
+//! 命名注册, 监视, 定时器, Actor 启动与 I/O 提交都在共享状态上完成.
+//! 事件队列由 I/O 完成与 Actor 原语投递, 调度循环统一消费.
+//! 本模块只处理跨任务可见的数据, 不推进抽象机.
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
+use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 
+use super::timer_heap::TimerHeap;
 use crate::check::Type;
 use crate::cps::gc::{GcRegistry, Marker};
 use crate::error::RuntimeError as Error;
-use crate::value::{ActorHandle, ActorResult, ExitReason, Value, exit_reason_value};
+use crate::value::{
+    ActorHandle, ActorResult, ExitReason, Value, exit_reason_value, join_result_value,
+};
 
 #[derive(Clone)]
 pub(crate) struct SchedulerHandle {
     shared: Arc<Mutex<Shared>>,
     gc: Arc<GcRegistry>,
+    /// 调度器唤醒通道; 容量为 1, 多次事件合并为一次唤醒.
+    wake: Sender<()>,
 }
 
 struct RegisteredPid {
@@ -45,14 +51,42 @@ pub(super) struct SendTimer {
     pub(super) message: Value,
 }
 
+/// 一个等待 Join 的 Actor.
+pub(super) struct JoinWaiter {
+    pub(super) actor: u64,
+}
+
+/// 调度器事件; 由 I/O 完成与 Actor 原语投递到统一事件队列.
+pub(super) enum ShardEvent {
+    Spawn(SpawnRequest),
+    Send {
+        target: u64,
+        index: usize,
+    },
+    Kill {
+        target: u64,
+    },
+    Io {
+        id: u64,
+        result: Result<Value, Error>,
+    },
+    Join {
+        actor: u64,
+        value: Value,
+    },
+}
+
 pub(super) struct Shared {
     next_id: u64,
     next_io: u64,
     next_monitor: u64,
     next_timer: u64,
-    pub(super) spawns: Vec<SpawnRequest>,
-    pub(super) wakes: Vec<Wake>,
-    pub(super) io_results: Vec<(u64, Result<Value, Error>)>,
+    /// 调度器待处理的事件.
+    pub(super) events: Vec<ShardEvent>,
+    /// Prelude 任务的 I/O 完成; Prelude 不是 Actor.
+    pub(super) prelude_io: Vec<(u64, Result<Value, Error>)>,
+    /// 全部任务共享的命令行参数; 启动 Actor 时读取.
+    pub(super) args: Vec<String>,
     io_cancellations: HashMap<u64, Arc<AtomicBool>>,
     /// 命名注册表以运行时字符串为键, 不进入全局符号驻留表.
     names: HashMap<Arc<str>, RegisteredPid>,
@@ -60,25 +94,47 @@ pub(super) struct Shared {
     pub(super) monitors: HashMap<u64, MonitorEntry>,
     pub(super) monitors_by_target: HashMap<u64, HashSet<u64>>,
     pub(super) monitors_by_watcher: HashMap<u64, HashSet<u64>>,
-    pub(super) send_timers: HashMap<u64, SendTimer>,
-    /// 延迟投递的最小堆; 取消或目标终止后条目留在堆中, 到堆顶时跳过.
-    send_timer_heap: BinaryHeap<Reverse<(Instant, u64)>>,
+    /// 延迟投递定时器; 取消或目标终止后条目惰性失效.
+    pub(super) send_timers: TimerHeap<u64, SendTimer>,
+    /// 目标终止时等待 Join 的 Actor; 键是目标编号.
+    join_waiters: HashMap<u64, Vec<JoinWaiter>>,
+    /// Join 等待的反向索引: 等待者 -> 目标; 一个 Actor 同时只等待一个目标.
+    join_targets: HashMap<u64, u64>,
+    /// 未观察的 Actor 运行时错误; 由宿主统一取走并渲染.
+    pub(super) actor_errors: Vec<(Arc<AtomicBool>, Error)>,
+    /// `@Main` 根 Actor 的编号; 根结局结束一次根运行.
+    root_actor: Option<u64>,
+    pub(super) root_result: Option<Result<Value, Error>>,
 }
 
 impl Shared {
-    /// 遍历待启动的 Actor 与 I/O 结果; 环回收根标记用.
+    /// 遍历共享状态中的运行时值; 环回收根标记用.
     pub(super) fn trace(&self, marker: &mut Marker) {
-        for request in &self.spawns {
-            marker.mark_actor(&request.handle);
-            marker.mark_value(&request.handler);
-            for arg in &request.args {
-                marker.mark_value(arg);
+        for event in &self.events {
+            match event {
+                ShardEvent::Spawn(request) => {
+                    marker.mark_actor(&request.handle);
+                    marker.mark_value(&request.handler);
+                    for arg in &request.args {
+                        marker.mark_value(arg);
+                    }
+                },
+                ShardEvent::Send { .. } | ShardEvent::Kill { .. } => {},
+                ShardEvent::Io { result, .. } => {
+                    if let Ok(value) = result {
+                        marker.mark_value(value);
+                    }
+                },
+                ShardEvent::Join { value, .. } => marker.mark_value(value),
             }
         }
-        for (_, result) in &self.io_results {
+        for (_, result) in &self.prelude_io {
             if let Ok(value) = result {
                 marker.mark_value(value);
             }
+        }
+        if let Some(Ok(value)) = &self.root_result {
+            marker.mark_value(value);
         }
         for entry in self.names.values() {
             marker.mark_actor(&entry.pid);
@@ -162,27 +218,15 @@ impl Shared {
     }
 
     pub(super) fn take_due_send_timers(&mut self, now: Instant) -> Vec<SendTimer> {
-        let mut due = Vec::new();
-        while let Some(Reverse((deadline, id))) = self.send_timer_heap.peek().copied() {
-            if deadline > now {
-                break;
-            }
-            self.send_timer_heap.pop();
-            if let Some(timer) = self.send_timers.remove(&id) {
-                due.push(timer);
-            }
-        }
-        due
+        self.send_timers
+            .take_due(now)
+            .into_iter()
+            .map(|(_, timer)| timer)
+            .collect()
     }
 
     pub(super) fn next_send_deadline(&mut self) -> Option<Instant> {
-        while let Some(Reverse((deadline, id))) = self.send_timer_heap.peek().copied() {
-            if self.send_timers.contains_key(&id) {
-                return Some(deadline);
-            }
-            self.send_timer_heap.pop();
-        }
-        None
+        self.send_timers.next_deadline()
     }
 
     fn cleanup_send_timers(&mut self, target_id: u64) {
@@ -191,7 +235,28 @@ impl Shared {
 
     fn clear_send_timers(&mut self) {
         self.send_timers.clear();
-        self.send_timer_heap.clear();
+    }
+
+    fn take_join_waiters(&mut self, target_id: u64) -> Vec<JoinWaiter> {
+        let Some(waiters) = self.join_waiters.remove(&target_id) else {
+            return Vec::new();
+        };
+        for waiter in &waiters {
+            self.join_targets.remove(&waiter.actor);
+        }
+        waiters
+    }
+
+    fn remove_join_waiter(&mut self, actor: u64) {
+        let Some(target) = self.join_targets.remove(&actor) else {
+            return;
+        };
+        if let Some(waiters) = self.join_waiters.get_mut(&target) {
+            waiters.retain(|waiter| waiter.actor != actor);
+            if waiters.is_empty() {
+                self.join_waiters.remove(&target);
+            }
+        }
     }
 }
 
@@ -199,53 +264,61 @@ pub(super) struct SpawnRequest {
     pub(super) handle: Arc<ActorHandle>,
     pub(super) handler: Value,
     pub(super) args: Vec<Value>,
-    /// 发起 Spawn 的输入轮次; 同一轮次内由主脚本及其 Actor 启动的 Actor 共享.
-    pub(super) epoch: u64,
-}
-
-pub(super) enum Wake {
-    Send {
-        source: Option<u64>,
-        target: u64,
-        index: usize,
-    },
-    Kill {
-        target: u64,
-    },
 }
 
 impl SchedulerHandle {
-    pub(super) fn new(gc: Arc<GcRegistry>) -> (Self, Arc<Mutex<Shared>>) {
+    pub(super) fn new(gc: Arc<GcRegistry>, wake: Sender<()>) -> (Self, Arc<Mutex<Shared>>) {
         let shared = Arc::new(Mutex::new(Shared {
             next_id: 1,
             next_io: 1,
             next_monitor: 1,
             next_timer: 1,
-            spawns: Vec::new(),
-            wakes: Vec::new(),
-            io_results: Vec::new(),
+            events: Vec::new(),
+            prelude_io: Vec::new(),
+            args: Vec::new(),
             io_cancellations: HashMap::new(),
             names: HashMap::new(),
             names_by_pid: HashMap::new(),
             monitors: HashMap::new(),
             monitors_by_target: HashMap::new(),
             monitors_by_watcher: HashMap::new(),
-            send_timers: HashMap::new(),
-            send_timer_heap: BinaryHeap::new(),
+            send_timers: TimerHeap::new(),
+            join_waiters: HashMap::new(),
+            join_targets: HashMap::new(),
+            actor_errors: Vec::new(),
+            root_actor: None,
+            root_result: None,
         }));
         (
             Self {
                 shared: Arc::clone(&shared),
                 gc,
+                wake,
             },
             shared,
         )
+    }
+
+    /// 更新全部任务共享的命令行参数.
+    pub(crate) fn set_args(&self, args: Vec<String>) {
+        self.shared.lock().args = args;
     }
 
     /// 调度器共享的环回收注册表.
     #[must_use]
     pub(crate) fn registry(&self) -> &Arc<GcRegistry> {
         &self.gc
+    }
+
+    /// 把事件放入事件队列并唤醒调度器.
+    pub(super) fn push_event(&self, event: ShardEvent) {
+        self.shared.lock().events.push(event);
+        self.wake();
+    }
+
+    fn wake(&self) {
+        // 容量为 1, 合并重复通知; 运行时被丢弃后的发送失败无需处理.
+        let _ = self.wake.try_send(());
     }
 
     /// 注册名字; 同名同 Pid 同类型视为幂等, 其余冲突返回 false.
@@ -303,10 +376,6 @@ impl SchedulerHandle {
         self.shared.lock().cleanup_names(id);
     }
 
-    pub(crate) fn clear_names(&self) {
-        self.shared.lock().clear_names();
-    }
-
     /// 登记一次监视; 目标已终止时立即投递通知.
     ///
     /// 监视自身没有意义, 返回 None. 目标已终止时仍返回编号, 但不再登记,
@@ -331,7 +400,7 @@ impl SchedulerHandle {
             drop(shared);
             let notice = monitor_notice_value(notice_id, &reason);
             if watcher.send(index, notice) {
-                self.wake_send(None, watcher.id, index);
+                self.wake_send(watcher.id, index);
             }
             return Some(notice_id);
         }
@@ -382,7 +451,7 @@ impl SchedulerHandle {
         };
         for (watcher, index, notice) in actions {
             if watcher.send(index, notice) {
-                self.wake_send(None, watcher.id, index);
+                self.wake_send(watcher.id, index);
             }
         }
     }
@@ -396,10 +465,6 @@ impl SchedulerHandle {
         for id in ids {
             shared.remove_monitor(id);
         }
-    }
-
-    pub(crate) fn clear_monitors(&self) {
-        self.shared.lock().clear_monitors();
     }
 
     /// 登记一次延迟投递; 目标已终止时返回 None.
@@ -418,6 +483,7 @@ impl SchedulerHandle {
         let id = shared.next_timer;
         shared.next_timer += 1;
         shared.send_timers.insert(
+            deadline,
             id,
             SendTimer {
                 target: Arc::downgrade(target),
@@ -427,7 +493,6 @@ impl SchedulerHandle {
                 message,
             },
         );
-        shared.send_timer_heap.push(Reverse((deadline, id)));
         Some(id)
     }
 
@@ -448,53 +513,122 @@ impl SchedulerHandle {
         self.shared.lock().cleanup_send_timers(target_id);
     }
 
-    pub(crate) fn clear_send_timers(&self) {
-        self.shared.lock().clear_send_timers();
-    }
-
     /// 创建 Actor 句柄并登记启动请求; 返回 Pid 值.
     pub(crate) fn spawn(
         &self,
         parent: Option<&Arc<ActorHandle>>,
-        epoch: u64,
         mailboxes: usize,
         detached: bool,
         handler: Value,
         args: Vec<Value>,
     ) -> Value {
-        let mut shared = self.shared.lock();
-        let id = shared.next_id;
-        shared.next_id += 1;
+        let handle = self.enqueue_spawn(parent, mailboxes, detached, handler, args);
+        self.wake();
+        Value::Pid(handle)
+    }
+
+    /// 创建根 Actor 并登记启动请求.
+    ///
+    /// 根编号必须在启动事件入队前写入共享状态, 否则调度循环可能先启动
+    /// 根 Actor, 把它当成普通 Actor 而丢失根结局.
+    pub(crate) fn spawn_root(
+        &self,
+        mailboxes: usize,
+        handler: Value,
+        args: Vec<Value>,
+    ) -> Value {
+        let mut state = self.shared.lock();
+        let id = state.next_id;
+        state.next_id += 1;
+        let handle = Arc::new(ActorHandle::new(id, mailboxes, None));
+        self.gc.register_actor(&handle);
+        state.root_actor = Some(id);
+        state.root_result = None;
+        state.events.push(ShardEvent::Spawn(SpawnRequest {
+            handle: Arc::clone(&handle),
+            handler,
+            args,
+        }));
+        drop(state);
+        self.wake();
+        Value::Pid(handle)
+    }
+
+    fn enqueue_spawn(
+        &self,
+        parent: Option<&Arc<ActorHandle>>,
+        mailboxes: usize,
+        detached: bool,
+        handler: Value,
+        args: Vec<Value>,
+    ) -> Arc<ActorHandle> {
+        let mut state = self.shared.lock();
+        let id = state.next_id;
+        state.next_id += 1;
         let parent_handle = if detached { None } else { parent.cloned() };
         let handle = Arc::new(ActorHandle::new(id, mailboxes, parent_handle.clone()));
         self.gc.register_actor(&handle);
         if let Some(parent) = &parent_handle {
             parent.add_child(id);
         }
-        shared.spawns.push(SpawnRequest {
+        state.events.push(ShardEvent::Spawn(SpawnRequest {
             handle: Arc::clone(&handle),
             handler,
             args,
-            epoch,
-        });
-        Value::Pid(handle)
+        }));
+        handle
     }
 
-    pub(crate) fn wake_send(&self, source: Option<u64>, target: u64, index: usize) {
-        self.shared.lock().wakes.push(Wake::Send {
-            source,
-            target,
-            index,
-        });
+    pub(crate) fn is_root(&self, id: u64) -> bool {
+        self.shared.lock().root_actor == Some(id)
+    }
+
+    pub(crate) fn set_root_result(&self, result: Result<Value, Error>) {
+        self.shared.lock().root_result = Some(result);
+    }
+
+    pub(crate) fn take_root_result(&self) -> Option<Result<Value, Error>> {
+        self.shared.lock().root_result.take()
+    }
+
+    /// 登记 Join 等待; 目标已终止时直接返回结局.
+    ///
+    /// 检查与登记在同一把共享锁内, 与终止路径的"设置结局后再取等待者"
+    /// 配合, 避免在检查与登记之间丢失唤醒.
+    pub(crate) fn wait_join(&self, target: &Arc<ActorHandle>, waiter: u64) -> Option<Value> {
+        let mut shared = self.shared.lock();
+        if let Some(result) = target.result() {
+            return Some(join_result_value(&result));
+        }
+        shared
+            .join_waiters
+            .entry(target.id)
+            .or_default()
+            .push(JoinWaiter { actor: waiter });
+        shared.join_targets.insert(waiter, target.id);
+        None
+    }
+
+    /// 取走目标终止时需唤醒的全部 Join 等待者.
+    pub(super) fn take_join_waiters(&self, target_id: u64) -> Vec<JoinWaiter> {
+        self.shared.lock().take_join_waiters(target_id)
+    }
+
+    /// 等待者终止或不再等待时删除登记.
+    pub(crate) fn remove_join_waiter(&self, actor: u64) {
+        self.shared.lock().remove_join_waiter(actor);
+    }
+
+    pub(crate) fn wake_send(&self, target: u64, index: usize) {
+        self.push_event(ShardEvent::Send { target, index });
     }
 
     pub(crate) fn wake_kill(&self, target: u64) {
-        self.shared.lock().wakes.push(Wake::Kill { target });
+        self.push_event(ShardEvent::Kill { target });
     }
 
-    /// 把 I/O 任务提交到线程池或专用输入线程; 完成后放入完成队列.
-    pub(crate) fn submit_io(&self, job: crate::io::Task) -> (u64, crate::io::IoKind) {
-        let kind = job.kind();
+    /// 把 I/O 任务提交到线程池或专用输入线程; 完成后放入 Actor 或 Prelude 队列.
+    pub(crate) fn submit_io(&self, job: crate::io::Task, owner: Option<u64>) -> u64 {
         let cancel = Arc::new(AtomicBool::new(false));
         let id = {
             let mut shared = self.shared.lock();
@@ -504,18 +638,83 @@ impl SchedulerHandle {
             id
         };
         let shared = Arc::clone(&self.shared);
-        crate::io::submit_task(job, cancel, move |result| {
+        let wake = self.wake.clone();
+        crate::io::submit_task(job, id, cancel, move |result| {
             let mut shared = shared.lock();
             shared.io_cancellations.remove(&id);
-            shared.io_results.push((id, result));
+            if owner.is_some() {
+                shared.events.push(ShardEvent::Io { id, result });
+            } else {
+                shared.prelude_io.push((id, result));
+            }
+            drop(shared);
+            // 容量为 1, 合并重复通知; 运行时被丢弃后的发送失败无需处理.
+            let _ = wake.try_send(());
         });
-        (id, kind)
+        id
     }
 
-    /// 请求取消一个 I/O 操作; 只有终端读取会协作检查取消标记.
+    /// 请求取消一个 I/O 操作; 终端读取与网络操作会响应取消标记与通知.
     pub(crate) fn cancel_io(&self, id: u64) {
         if let Some(cancel) = self.shared.lock().io_cancellations.get(&id) {
             cancel.store(true, Ordering::Relaxed);
+        }
+        crate::io::cancel_task(id);
+    }
+
+    pub(crate) fn take_prelude_io(&self) -> Vec<(u64, Result<Value, Error>)> {
+        std::mem::take(&mut self.shared.lock().prelude_io)
+    }
+
+    pub(crate) fn has_send_timers(&self) -> bool {
+        !self.shared.lock().send_timers.is_empty()
+    }
+
+    /// 是否还有尚未分发的事件.
+    pub(crate) fn has_pending_events(&self) -> bool {
+        let shared = self.shared.lock();
+        !shared.prelude_io.is_empty() || !shared.events.is_empty()
+    }
+
+    pub(crate) fn take_actor_errors(&self) -> Vec<Error> {
+        let errors = std::mem::take(&mut self.shared.lock().actor_errors);
+        errors
+            .into_iter()
+            .filter_map(|(observed, error)| {
+                if observed.load(Ordering::Relaxed) {
+                    None
+                } else {
+                    Some(error)
+                }
+            })
+            .collect()
+    }
+
+    /// 清空共享状态; 调度器关闭时调用.
+    pub(crate) fn clear_runtime_state(&self) {
+        let pending = {
+            let mut shared = self.shared.lock();
+            let mut pending = Vec::new();
+            for event in std::mem::take(&mut shared.events) {
+                if let ShardEvent::Spawn(request) = event {
+                    pending.push(request.handle);
+                }
+            }
+            shared.prelude_io.clear();
+            shared.io_cancellations.clear();
+            shared.actor_errors.clear();
+            shared.join_waiters.clear();
+            shared.join_targets.clear();
+            shared.root_actor = None;
+            shared.root_result = None;
+            shared.clear_names();
+            shared.clear_monitors();
+            shared.clear_send_timers();
+            pending
+        };
+        for handle in pending {
+            // 未启动的句柄必须标记终止, 否则 Join 等待者眼中的目标永远是 Running.
+            let _ = handle.finish(Err(ExitReason::Killed));
         }
     }
 }

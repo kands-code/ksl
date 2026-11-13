@@ -55,7 +55,7 @@ fn match_and_continuation_blocks_are_explicit() {
     );
     assert!(ir.contains("match "));
     assert!(ir.contains("jump b"));
-    // 模式绑定成为目标块参数, 运行期没有续延表.
+    // 模式绑定成为目标块参数, 运行时没有续延表.
     assert!(ir.contains("Some[n : i64] -> b"), "模式参数缺失: {ir}");
 }
 

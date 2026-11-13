@@ -11,10 +11,10 @@ use crate::value::{List, Value, list_owned};
 
 /// 按结果类型选择空列表表示.
 pub(super) fn empty_for_type(ty: &Type) -> List {
-    let Type::List(inner) = ty else {
+    let Some(inner) = ty.as_list() else {
         return List::empty_values();
     };
-    match &**inner {
+    match inner {
         Type::I64 => List::empty_i64(),
         Type::U8 => List::empty_u8(),
         Type::U64 => List::empty_u64(),

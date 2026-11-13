@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 编译 ksl 语法并安装到 Helix 运行期目录.
+# 编译 ksl 语法并安装到 Helix 运行时目录.
 # 只写 runtime 文件; 语言登记由 .helix/languages.toml 提供.
 
 set -euo pipefail

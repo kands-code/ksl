@@ -1,7 +1,6 @@
 //! 内置函数注册表数据.
 //!
-//! 注册表要逐项引用父模块的实现函数; 显式列出近百个名字会与表本身重复,
-//! 故允许通配导入父模块.
+//! 注册表逐项引用父模块的实现函数, 使用通配导入.
 
 #![allow(clippy::wildcard_imports)]
 
@@ -36,6 +35,13 @@ pub(super) enum EntryKind {
     Io(crate::io::Builder),
 }
 
+/// 内置函数的可执行形态; 检查器与运行时共用同一份表.
+#[derive(Clone, Copy)]
+pub(crate) enum Builtin {
+    Pure(BuiltinFn),
+    Io(crate::io::Builder),
+}
+
 pub(super) struct Entry {
     pub(super) symbol: Symbol,
     pub(super) name: &'static str,
@@ -61,19 +67,11 @@ pub fn names() -> Vec<Symbol> {
     TABLE.iter().map(|entry| entry.symbol).collect()
 }
 
-/// 按编号取普通实现; I/O 内置返回 None.
-pub(crate) fn lookup(id: BuiltinId) -> Option<BuiltinFn> {
+/// 按编号取内置函数的可执行形态; 普通实现与 I/O 构造器只查一次表.
+pub(crate) fn resolve(id: BuiltinId) -> Option<Builtin> {
     match TABLE.get(id.0 as usize)?.kind {
-        EntryKind::Pure(function) => Some(function),
-        EntryKind::Io(_) => None,
-    }
-}
-
-/// 按编号取 I/O 任务构造器; 普通内置返回 None.
-pub(crate) fn io_builder(id: BuiltinId) -> Option<crate::io::Builder> {
-    match TABLE.get(id.0 as usize)?.kind {
-        EntryKind::Io(builder) => Some(builder),
-        EntryKind::Pure(_) => None,
+        EntryKind::Pure(function) => Some(Builtin::Pure(function)),
+        EntryKind::Io(builder) => Some(Builtin::Io(builder)),
     }
 }
 
@@ -89,30 +87,31 @@ pub(crate) fn name(id: BuiltinId) -> &'static str {
 
 pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
     use Type::{
-        Bool as B, Char as C, DateTime as D, F64 as F, Fn as Fun, I64 as I, List as L,
-        Nil as N, Str as S, U8, U64,
+        Bool as B, Char as C, F64 as F, Fn as Fun, I64 as I, Nil as N, Str as S, U8, U64,
     };
 
-    let io_entries: [(&'static str, Type, crate::io::Builder); 28] = [
+    let io_entries: [(&'static str, Type, crate::io::Builder); 29] = [
         (
             "ReadLine",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(Type::OptionT(Box::new(S))),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(Type::option(S), Type::data(intern("IOError")))),
             ),
             crate::io::read_line_task,
+        ),
+        (
+            "ReadLinePlain",
+            Fun(
+                vec![S],
+                Box::new(Type::result(Type::option(S), Type::data(intern("IOError")))),
+            ),
+            crate::io::read_line_plain_task,
         ),
         (
             "ReadFile",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(S),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(S, Type::data(intern("IOError")))),
             ),
             crate::io::read_file_task,
         ),
@@ -120,10 +119,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "ReadFileBytes",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(L(Box::new(U8))),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(Type::list(U8), Type::data(intern("IOError")))),
             ),
             crate::io::read_file_bytes_task,
         ),
@@ -131,9 +127,9 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "ReadKey",
             Fun(
                 vec![],
-                Box::new(Type::ResultT(
-                    Box::new(Type::Data(intern("KeyEvent"))),
-                    Box::new(Type::Data(intern("IOError"))),
+                Box::new(Type::result(
+                    Type::data(intern("KeyEvent")),
+                    Type::data(intern("IOError")),
                 )),
             ),
             crate::io::read_key_task,
@@ -142,21 +138,15 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "WriteFile",
             Fun(
                 vec![S, S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::write_file_task,
         ),
         (
             "WriteFileBytes",
             Fun(
-                vec![S, L(Box::new(U8))],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                vec![S, Type::list(U8)],
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::write_file_bytes_task,
         ),
@@ -164,21 +154,15 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "AppendFile",
             Fun(
                 vec![S, S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::append_file_task,
         ),
         (
             "AppendFileBytes",
             Fun(
-                vec![S, L(Box::new(U8))],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                vec![S, Type::list(U8)],
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::append_file_bytes_task,
         ),
@@ -186,10 +170,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "ListDirectory",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(L(Box::new(S))),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(Type::list(S), Type::data(intern("IOError")))),
             ),
             crate::io::list_directory_task,
         ),
@@ -197,10 +178,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "CreateDirectory",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::create_directory_task,
         ),
@@ -208,10 +186,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "CreateDirectoryAll",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::create_directory_all_task,
         ),
@@ -219,10 +194,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "RemoveDirectory",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::remove_directory_task,
         ),
@@ -230,10 +202,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "RemoveFile",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::remove_file_task,
         ),
@@ -241,10 +210,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "RenamePath",
             Fun(
                 vec![S, S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::rename_path_task,
         ),
@@ -252,10 +218,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "CopyFile",
             Fun(
                 vec![S, S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::copy_file_task,
         ),
@@ -272,23 +235,14 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
         ),
         (
             "GetCurrentDirectory",
-            Fun(
-                vec![],
-                Box::new(Type::ResultT(
-                    Box::new(S),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
-            ),
+            Fun(vec![], Box::new(Type::result(S, Type::data(intern("IOError"))))),
             crate::io::get_current_directory_task,
         ),
         (
             "OpenRead",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(Type::File),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(Type::file(), Type::data(intern("IOError")))),
             ),
             crate::io::open_read_task,
         ),
@@ -296,10 +250,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "OpenWrite",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(Type::File),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(Type::file(), Type::data(intern("IOError")))),
             ),
             crate::io::open_write_task,
         ),
@@ -307,53 +258,41 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "OpenAppend",
             Fun(
                 vec![S],
-                Box::new(Type::ResultT(
-                    Box::new(Type::File),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                Box::new(Type::result(Type::file(), Type::data(intern("IOError")))),
             ),
             crate::io::open_append_task,
         ),
         (
             "Close",
             Fun(
-                vec![Type::File],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                vec![Type::file()],
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::close_task,
         ),
         (
             "Flush",
             Fun(
-                vec![Type::File],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                vec![Type::file()],
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::flush_task,
         ),
         (
             "ReadLineFrom",
             Fun(
-                vec![Type::File],
-                Box::new(Type::ResultT(
-                    Box::new(Type::OptionT(Box::new(S))),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                vec![Type::file()],
+                Box::new(Type::result(Type::option(S), Type::data(intern("IOError")))),
             ),
             crate::io::read_line_from_task,
         ),
         (
             "ReadChunk",
             Fun(
-                vec![Type::File, U64],
-                Box::new(Type::ResultT(
-                    Box::new(Type::OptionT(Box::new(L(Box::new(U8))))),
-                    Box::new(Type::Data(intern("IOError"))),
+                vec![Type::file(), U64],
+                Box::new(Type::result(
+                    Type::option(Type::list(U8)),
+                    Type::data(intern("IOError")),
                 )),
             ),
             crate::io::read_chunk_task,
@@ -361,24 +300,112 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
         (
             "WriteString",
             Fun(
-                vec![Type::File, S],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                vec![Type::file(), S],
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::write_string_task,
         ),
         (
             "WriteBytes",
             Fun(
-                vec![Type::File, L(Box::new(U8))],
-                Box::new(Type::ResultT(
-                    Box::new(N),
-                    Box::new(Type::Data(intern("IOError"))),
-                )),
+                vec![Type::file(), Type::list(U8)],
+                Box::new(Type::result(N, Type::data(intern("IOError")))),
             ),
             crate::io::write_bytes_task,
+        ),
+    ];
+
+    let socket_entries: [(&'static str, Type, crate::io::Builder); 14] = [
+        (
+            "TcpListen",
+            Fun(vec![S, U64], Box::new(socket_result(Type::tcp_listener()))),
+            crate::io::net::tcp_listen_task,
+        ),
+        (
+            "TcpAccept",
+            Fun(
+                vec![Type::tcp_listener(), U64],
+                Box::new(socket_result(Type::socket())),
+            ),
+            crate::io::net::tcp_accept_task,
+        ),
+        (
+            "TcpConnect",
+            Fun(vec![S, U64, U64], Box::new(socket_result(Type::socket()))),
+            crate::io::net::tcp_connect_task,
+        ),
+        (
+            "TcpCloseListener",
+            Fun(vec![Type::tcp_listener()], Box::new(N)),
+            crate::io::net::tcp_close_listener_task,
+        ),
+        (
+            "TcpLocalPort",
+            Fun(vec![Type::tcp_listener()], Box::new(U64)),
+            crate::io::net::tcp_local_port_task,
+        ),
+        (
+            "SocketPeer",
+            Fun(vec![Type::socket()], Box::new(S)),
+            crate::io::net::socket_peer_task,
+        ),
+        (
+            "SocketRead",
+            Fun(
+                vec![Type::socket(), U64, U64],
+                Box::new(socket_result(Type::option(Type::list(U8)))),
+            ),
+            crate::io::net::socket_read_task,
+        ),
+        (
+            "SocketReadExact",
+            Fun(
+                vec![Type::socket(), U64, U64],
+                Box::new(socket_result(Type::list(U8))),
+            ),
+            crate::io::net::socket_read_exact_task,
+        ),
+        (
+            "SocketReadAll",
+            Fun(
+                vec![Type::socket(), U64, U64],
+                Box::new(socket_result(Type::list(U8))),
+            ),
+            crate::io::net::socket_read_all_task,
+        ),
+        (
+            "SocketReadLine",
+            Fun(
+                vec![Type::socket(), U64, U64],
+                Box::new(socket_result(Type::option(S))),
+            ),
+            crate::io::net::socket_read_line_task,
+        ),
+        (
+            "SocketWrite",
+            Fun(
+                vec![Type::socket(), Type::list(U8), U64],
+                Box::new(socket_result(U64)),
+            ),
+            crate::io::net::socket_write_task,
+        ),
+        (
+            "SocketWriteAll",
+            Fun(
+                vec![Type::socket(), Type::list(U8), U64],
+                Box::new(socket_result(N)),
+            ),
+            crate::io::net::socket_write_all_task,
+        ),
+        (
+            "SocketWriteLine",
+            Fun(vec![Type::socket(), S, U64], Box::new(socket_result(N))),
+            crate::io::net::socket_write_line_task,
+        ),
+        (
+            "SocketClose",
+            Fun(vec![Type::socket()], Box::new(N)),
+            crate::io::net::socket_close_task,
         ),
     ];
 
@@ -487,17 +514,51 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
         ("I64ToU64", Fun(vec![I], Box::new(U64)), i64_to_u64 as BuiltinFn),
         ("U64ToI64", Fun(vec![U64], Box::new(I)), u64_to_i64 as BuiltinFn),
         ("U64ToF64", Fun(vec![U64], Box::new(F)), u64_to_f64 as BuiltinFn),
-        ("CharToI64", Fun(vec![C], Box::new(I)), char_to_i64 as BuiltinFn),
-        ("I64ToChar", Fun(vec![I], Box::new(C)), i64_to_char as BuiltinFn),
+        (
+            "CharToU64",
+            Fun(vec![C], Box::new(U64)),
+            char_to_u64 as BuiltinFn,
+        ),
+        (
+            "U64ToChar",
+            Fun(vec![U64], Box::new(C)),
+            u64_to_char as BuiltinFn,
+        ),
         (
             "StringToChars",
-            Fun(vec![S], Box::new(L(Box::new(C)))),
+            Fun(vec![S], Box::new(Type::list(C))),
             string_to_chars as BuiltinFn,
         ),
         (
             "CharsToString",
-            Fun(vec![L(Box::new(C))], Box::new(S)),
+            Fun(vec![Type::list(C)], Box::new(S)),
             chars_to_string as BuiltinFn,
+        ),
+        (
+            "IsWhitespace",
+            Fun(vec![C], Box::new(B)),
+            is_whitespace as BuiltinFn,
+        ),
+        (
+            "IsAsciiDigit",
+            Fun(vec![C], Box::new(B)),
+            is_ascii_digit as BuiltinFn,
+        ),
+        ("IsLetter", Fun(vec![C], Box::new(B)), is_letter as BuiltinFn),
+        (
+            "IsUppercase",
+            Fun(vec![C], Box::new(B)),
+            is_uppercase as BuiltinFn,
+        ),
+        (
+            "IsLowercase",
+            Fun(vec![C], Box::new(B)),
+            is_lowercase as BuiltinFn,
+        ),
+        (
+            "IsAlphanumeric",
+            Fun(vec![C], Box::new(B)),
+            is_alphanumeric as BuiltinFn,
         ),
         (
             "StringLength",
@@ -506,17 +567,17 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
         ),
         (
             "StringSplit",
-            Fun(vec![S, S], Box::new(L(Box::new(S)))),
+            Fun(vec![S, S], Box::new(Type::list(S))),
             string_split as BuiltinFn,
         ),
         (
             "StringLines",
-            Fun(vec![S], Box::new(L(Box::new(S)))),
+            Fun(vec![S], Box::new(Type::list(S))),
             string_lines as BuiltinFn,
         ),
         (
             "StringWords",
-            Fun(vec![S], Box::new(L(Box::new(S)))),
+            Fun(vec![S], Box::new(Type::list(S))),
             string_words as BuiltinFn,
         ),
         (
@@ -561,35 +622,32 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
         ),
         (
             "StringJoin",
-            Fun(vec![L(Box::new(S))], Box::new(S)),
+            Fun(vec![Type::list(S)], Box::new(S)),
             string_join as BuiltinFn,
         ),
         (
             "EncodeUtf8",
-            Fun(vec![S], Box::new(L(Box::new(U8)))),
+            Fun(vec![S], Box::new(Type::list(U8))),
             encode_utf8 as BuiltinFn,
         ),
         (
             "DecodeUtf8",
-            Fun(
-                vec![L(Box::new(U8))],
-                Box::new(Type::ResultT(Box::new(S), Box::new(S))),
-            ),
+            Fun(vec![Type::list(U8)], Box::new(Type::result(S, S))),
             decode_utf8 as BuiltinFn,
         ),
         (
             "ParseI64",
-            Fun(vec![S], Box::new(Type::ResultT(Box::new(I), Box::new(S)))),
+            Fun(vec![S], Box::new(Type::result(I, S))),
             parse_i64 as BuiltinFn,
         ),
         (
             "ParseF64",
-            Fun(vec![S], Box::new(Type::ResultT(Box::new(F), Box::new(S)))),
+            Fun(vec![S], Box::new(Type::result(F, S))),
             parse_f64 as BuiltinFn,
         ),
         (
             "ParseU64",
-            Fun(vec![S], Box::new(Type::ResultT(Box::new(U64), Box::new(S)))),
+            Fun(vec![S], Box::new(Type::result(U64, S))),
             parse_u64 as BuiltinFn,
         ),
         ("JoinPath", Fun(vec![S, S], Box::new(S)), join_path as BuiltinFn),
@@ -600,15 +658,15 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             Fun(vec![S], Box::new(N)),
             print_error as BuiltinFn,
         ),
-        ("Args", Fun(vec![], Box::new(L(Box::new(S)))), args as BuiltinFn),
+        ("Args", Fun(vec![], Box::new(Type::list(S))), args as BuiltinFn),
         (
             "ClosedFile",
-            Fun(vec![], Box::new(Type::File)),
+            Fun(vec![], Box::new(Type::file())),
             closed_file as BuiltinFn,
         ),
         (
             "GetEnv",
-            Fun(vec![S], Box::new(Type::OptionT(Box::new(S)))),
+            Fun(vec![S], Box::new(Type::option(S))),
             get_env as BuiltinFn,
         ),
         ("Not", Fun(vec![B], Box::new(B)), not as BuiltinFn),
@@ -702,12 +760,20 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
         ),
         ("EqualBool", bin(B), equal_bool as BuiltinFn),
         // 时间与日期.
-        ("Now", Fun(vec![], Box::new(D)), time::now as BuiltinFn),
-        ("NowUtc", Fun(vec![], Box::new(D)), time::now_utc as BuiltinFn),
-        ("TimeYear", time_field(), time::time_year as BuiltinFn),
-        ("TimeMonth", time_field(), time::time_month as BuiltinFn),
-        ("TimeDay", time_field(), time::time_day as BuiltinFn),
-        ("TimeWeekday", time_field(), time::time_weekday as BuiltinFn),
+        (
+            "Now",
+            Fun(vec![], Box::new(Type::date_time())),
+            time::now as BuiltinFn,
+        ),
+        (
+            "NowUtc",
+            Fun(vec![], Box::new(Type::date_time())),
+            time::now_utc as BuiltinFn,
+        ),
+        ("DateYear", time_field(), time::date_year as BuiltinFn),
+        ("DateMonth", time_field(), time::date_month as BuiltinFn),
+        ("DateDay", time_field(), time::date_day as BuiltinFn),
+        ("DateWeekday", time_field(), time::date_weekday as BuiltinFn),
         ("TimeHour", time_field(), time::time_hour as BuiltinFn),
         ("TimeMinute", time_field(), time::time_minute as BuiltinFn),
         ("TimeSecond", time_field(), time::time_second as BuiltinFn),
@@ -717,24 +783,24 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             time::time_millisecond as BuiltinFn,
         ),
         (
-            "TimeInZone",
-            Fun(vec![D, S], Box::new(time_result())),
-            time::time_in_zone as BuiltinFn,
+            "DateTimeInZone",
+            Fun(vec![Type::date_time(), S], Box::new(time_result())),
+            time::date_time_in_zone as BuiltinFn,
         ),
         (
             "TimeZoneName",
-            Fun(vec![D], Box::new(S)),
+            Fun(vec![Type::date_time()], Box::new(S)),
             time::time_zone_name as BuiltinFn,
         ),
         (
             "TimeZoneOffsetMinutes",
-            Fun(vec![D], Box::new(I)),
+            Fun(vec![Type::date_time()], Box::new(I)),
             time::time_zone_offset_minutes as BuiltinFn,
         ),
         (
-            "TimeFromParts",
+            "DateTimeFromParts",
             Fun(vec![I, I, I, I, I, I], Box::new(time_result())),
-            time::time_from_parts as BuiltinFn,
+            time::date_time_from_parts as BuiltinFn,
         ),
         (
             "ParseDateTime",
@@ -742,29 +808,44 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             time::parse_date_time as BuiltinFn,
         ),
         (
-            "TimeToString",
-            Fun(vec![D], Box::new(S)),
-            time::time_to_string as BuiltinFn,
+            "DateTimeToString",
+            Fun(vec![Type::date_time()], Box::new(S)),
+            time::date_time_to_string as BuiltinFn,
         ),
         (
             "DateTimeToEpochMillis",
-            Fun(vec![D], Box::new(I)),
+            Fun(vec![Type::date_time()], Box::new(I)),
             time::date_time_to_epoch_millis as BuiltinFn,
         ),
         (
             "EpochMillisToDateTime",
-            Fun(vec![I], Box::new(D)),
+            Fun(vec![I], Box::new(Type::date_time())),
             time::epoch_millis_to_date_time as BuiltinFn,
         ),
         (
             "LessDateTime",
-            Fun(vec![D, D], Box::new(B)),
+            Fun(vec![Type::date_time(), Type::date_time()], Box::new(B)),
             time::less_date_time as BuiltinFn,
         ),
         (
+            "LessOrEqualDateTime",
+            Fun(vec![Type::date_time(), Type::date_time()], Box::new(B)),
+            time::less_or_equal_date_time as BuiltinFn,
+        ),
+        (
             "EqualDateTime",
-            Fun(vec![D, D], Box::new(B)),
+            Fun(vec![Type::date_time(), Type::date_time()], Box::new(B)),
             time::equal_date_time as BuiltinFn,
+        ),
+        (
+            "GreaterDateTime",
+            Fun(vec![Type::date_time(), Type::date_time()], Box::new(B)),
+            time::greater_date_time as BuiltinFn,
+        ),
+        (
+            "GreaterOrEqualDateTime",
+            Fun(vec![Type::date_time(), Type::date_time()], Box::new(B)),
+            time::greater_or_equal_date_time as BuiltinFn,
         ),
         ("AddYear", time_shift(), time::add_year as BuiltinFn),
         ("SubYear", time_shift(), time::sub_year as BuiltinFn),
@@ -805,6 +886,16 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             signature,
             kind: EntryKind::Io(builder),
         }))
+        .chain(
+            socket_entries
+                .into_iter()
+                .map(|(name, signature, builder)| Entry {
+                    symbol: intern(name),
+                    name,
+                    signature,
+                    kind: EntryKind::Io(builder),
+                }),
+        )
         .collect()
 });
 
@@ -815,25 +906,27 @@ fn un(ty: Type) -> Type {
 
 /// 时间字段取值: `DateTime -> i64`.
 fn time_field() -> Type {
-    Type::Fn(vec![Type::DateTime], Box::new(Type::I64))
+    Type::Fn(vec![Type::date_time()], Box::new(Type::I64))
 }
 
 /// 可失败的时间操作: `Result[DateTime, TimeError]`.
 fn time_result() -> Type {
-    Type::ResultT(
-        Box::new(Type::DateTime),
-        Box::new(Type::Data(intern("TimeError"))),
-    )
+    Type::result(Type::date_time(), Type::data(intern("TimeError")))
 }
 
 /// 时间增减: `DateTime, u64 -> DateTime`.
 fn time_shift() -> Type {
-    Type::Fn(vec![Type::DateTime, Type::U64], Box::new(Type::DateTime))
+    Type::Fn(vec![Type::date_time(), Type::U64], Box::new(Type::date_time()))
 }
 
 /// 二元同类型运算的便捷构造.
 fn bin(ty: Type) -> Type {
     Type::Fn(vec![ty.clone(), ty.clone()], Box::new(ty))
+}
+
+/// 套接字操作结果: `Result[T, SocketError]`.
+fn socket_result(ok: Type) -> Type {
+    Type::result(ok, Type::data(intern("SocketError")))
 }
 
 static INDEX: LazyLock<HashMap<Symbol, BuiltinId>> = LazyLock::new(|| {

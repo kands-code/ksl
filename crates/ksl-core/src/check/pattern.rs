@@ -12,34 +12,38 @@ use crate::symbol::{Symbol, intern, keywords, resolve};
 
 impl Checker {
     pub(super) fn variant_set(&self, ty: &Type) -> Option<Vec<(Symbol, Vec<Type>)>> {
-        match ty {
-            Type::Data(name) => self.context.data.types.get(name).map(|info| {
+        if let Some(name) = ty.as_data() {
+            return self.context.data.types.get(&name).map(|info| {
                 info.variants
                     .iter()
                     .map(|(variant, fields)| (*variant, fields.clone()))
                     .collect()
-            }),
-            Type::OptionT(inner) => Some(vec![
-                (intern("Some"), vec![(*inner.clone())]),
-                (intern("None"), vec![]),
-            ]),
-            Type::ResultT(ok, err) => Some(vec![
-                (intern("Ok"), vec![(*ok.clone())]),
-                (intern("Err"), vec![(*err.clone())]),
-            ]),
-            _ => None,
+            });
         }
+        let (name, args) = ty.as_app()?;
+        let kw = keywords();
+        if name == kw.option_
+            && let [inner] = args
+        {
+            return Some(vec![
+                (intern("Some"), vec![inner.clone()]),
+                (intern("None"), Vec::new()),
+            ]);
+        }
+        if name == kw.result_
+            && let [ok, err] = args
+        {
+            return Some(vec![
+                (intern("Ok"), vec![ok.clone()]),
+                (intern("Err"), vec![err.clone()]),
+            ]);
+        }
+        None
     }
 
     /// 类型在受限名字中的限定名.
     pub(super) fn type_qualifier(ty: &Type) -> Option<Symbol> {
-        let kw = keywords();
-        match ty {
-            Type::Data(name) => Some(*name),
-            Type::OptionT(_) => Some(kw.option_),
-            Type::ResultT(..) => Some(kw.result_),
-            _ => None,
-        }
+        ty.as_app().map(|(name, _)| name)
     }
 
     /// 解析模式指向的变体: 校验限定名, 变体存在性与字段个数.
@@ -65,8 +69,8 @@ impl Checker {
             if qualifier.node != expected {
                 return Err(KslError::with_subject(
                     ErrorKind::TypeMismatch {
-                        expected: Type::Data(expected),
-                        found: Type::Data(qualifier.node),
+                        expected: Type::app(expected, Vec::new()),
+                        found: Type::app(qualifier.node, Vec::new()),
                     },
                     qualifier.span,
                     resolve(qualifier.node).to_string(),

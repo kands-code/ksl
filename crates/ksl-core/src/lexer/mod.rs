@@ -192,7 +192,7 @@ impl<'a> Lexer<'a> {
         after_r[hashes..].starts_with('"')
     }
 
-    /// 标识符或抛弃记号; 下划线后接数字不是合法标识符.
+    /// 标识符或丢弃记号; 下划线后接数字不是合法标识符.
     fn ident_or_discard(&mut self, start: usize) -> Result<TokenKind, KslError> {
         if self.peek() == Some('_') {
             while self.peek() == Some('_') {
@@ -207,7 +207,7 @@ impl<'a> Lexer<'a> {
                         Span::new(self.source, start, end),
                     ));
                 },
-                // 纯下划线序列默认视为抛弃记号 `_`.
+                // 纯下划线序列默认视为丢弃记号 `_`.
                 _ => return Ok(TokenKind::Discard),
             }
         } else {

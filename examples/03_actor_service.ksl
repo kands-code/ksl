@@ -37,13 +37,13 @@
 @Let[supervisor, @Handler[
   [self : Pid[Pair[u64, ExitReason], i64], attempt : i64] : i64,
   @Block[
-    @Let[child, @Spawn[1u, worker, MulI64[attempt, 14]]],
+    @Let[child, @Spawn[worker, MulI64[attempt, 14]]],
     @Let[mon, @Monitor[child]],
     @Match[mon, {
       (/Some[_id], @Match[@Receive[0u, Option/None[]], {
         (/Some[notice], @Match[@Snd[notice], {
           (/Halted[], @Block[
-            @Let[result, @Match[@Join[child], { (/Ok[v], v), (/Err[_], -1) }]],
+            @Let[result, @ResultGet[@Join[child], -1]],
             @If[EqualI64[attempt, 3], result, @Continue[AddI64[attempt, 1]]]
           ]),
           (_, -2)
@@ -54,18 +54,19 @@
     }]
   ]]];
 
-@Block[
-  @Let[server, @Spawn[1u, counter, 0]],
-  @Let[registered, @Register["counter", server]],
-  @Let[found : Option[Pid[Counter, i64]], @WhereIs["counter"]],
-  @Let[counter_result, @Match[found, {
-    (/Some[target], @Block[
-      @Let[worker, @Spawn[1u, client, target]],
-      @Match[@Join[worker], { (/Ok[v], v), (/Err[_], -1) }]
-    ]),
-    (/None[], -2)
-  }]],
-  @Let[supervisor_pid, @Spawn[1u, supervisor, 1]],
-  @Let[supervised, @Match[@Join[supervisor_pid], { (/Ok[v], v), (/Err[_], -1) }]],
-  Print[f"registered={registered} counter={counter_result} supervised={supervised}"]
-]
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[server, @Spawn[counter, 0]],
+    @Let[registered, @Register["counter", server]],
+    @Let[found : Option[Pid[Counter, i64]], @WhereIs["counter"]],
+    @Let[counter_result, @Match[found, {
+      (/Some[target], @Block[
+        @Let[worker, @Spawn[client, target]],
+        @ResultGet[@Join[worker], -1]
+      ]),
+      (/None[], -2)
+    }]],
+    @Let[supervisor_pid, @Spawn[supervisor, 1]],
+    @Let[supervised, @ResultGet[@Join[supervisor_pid], -1]],
+    Print[f"registered={registered} counter={counter_result} supervised={supervised}"]
+  ]]

@@ -34,34 +34,10 @@ impl Checker {
             .insert(expr.key(), InferTy::from_concrete(resolved));
         match (expr, resolved) {
             (TypeExpr::Named(_), _) => {},
-            (TypeExpr::Generic { args, .. }, resolved) => match resolved {
-                Type::List(inner) | Type::OptionT(inner) | Type::Set(inner) => {
-                    self.record_type_expr(&args[0], inner)?;
-                },
-                Type::Dict(first, second)
-                | Type::Pair(first, second)
-                | Type::ResultT(first, second) => {
-                    self.record_type_expr(&args[0], first)?;
-                    self.record_type_expr(&args[1], second)?;
-                },
-                Type::PidT(pid) => {
-                    for (arg, ty) in args
-                        .iter()
-                        .zip(pid.mailboxes.iter().chain(std::iter::once(pid.ret.as_ref())))
-                    {
-                        self.record_type_expr(arg, ty)?;
-                    }
-                },
-                Type::HandlerT(handler) => {
-                    let Some((first, rest)) = args.split_first() else {
-                        unreachable!("Handler 类型至少有一个参数");
-                    };
-                    self.record_type_expr(first, &handler.pid)?;
-                    for (arg, ty) in rest.iter().zip(&handler.args) {
-                        self.record_type_expr(arg, ty)?;
-                    }
-                },
-                _ => unreachable!("类型解析结果与语法形态不一致"),
+            (TypeExpr::Generic { args, .. }, Type::App { args: resolved, .. }) => {
+                for (arg, ty) in args.iter().zip(resolved.iter()) {
+                    self.record_type_expr(arg, ty)?;
+                }
             },
             (TypeExpr::Fn { params, ret, .. }, Type::Fn(param_types, ret_ty)) => {
                 for (param, ty) in params.iter().zip(param_types) {
@@ -69,7 +45,7 @@ impl Checker {
                 }
                 self.record_type_expr(ret, ret_ty)?;
             },
-            (TypeExpr::Fn { .. }, _) => unreachable!("函数类型解析结果不是 Fn"),
+            _ => unreachable!("类型解析结果与语法形态不一致"),
         }
         Ok(())
     }

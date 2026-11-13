@@ -12,6 +12,7 @@ use crate::source::Span;
 use crate::symbol::{Symbol, intern, resolve};
 
 impl Checker {
+    #[allow(clippy::too_many_lines)]
     pub(super) fn check_special_expect(
         &mut self,
         form: &Special,
@@ -75,31 +76,40 @@ impl Checker {
                 Ok(InferTy::Never)
             },
             Special::Handler { params, ret, body } => self.check_handler(params, ret, body),
+            Special::Main { params, ret, body } => self.check_main(params, ret, body, span),
             Special::Continue { args } => self.check_continue(args, span),
             Special::Spawn {
-                count,
                 handler,
                 args,
                 detached: _,
-            } => self.check_spawn(count, handler, args, span),
+            } => self.check_spawn(handler, args, span),
             Special::Send {
                 pid,
                 index,
                 message,
-            } => self.check_send(pid, index, message),
+            } => self.check_send(pid, index, message, span),
             Special::Receive { index, timeout } => self.check_receive(index, timeout, span),
-            Special::Join { pid } => self.check_join(pid),
-            Special::Kill { pid } => self.check_kill(pid),
+            Special::Join { pid } => {
+                self.require_actor(span)?;
+                self.check_join(pid)
+            },
+            Special::Kill { pid } => {
+                self.require_actor(span)?;
+                self.check_kill(pid)
+            },
             Special::Monitor { pid } => self.check_monitor(pid, span),
             Special::Unmonitor { id } => self.check_unmonitor(id, span),
-            Special::PidSerial { pid } => self.check_pid_serial(pid),
+            Special::PidSerial { pid } => {
+                self.require_actor(span)?;
+                self.check_pid_serial(pid)
+            },
             Special::SetTimer {
                 pid,
                 index,
                 message,
                 millis,
-            } => self.check_set_timer(pid, index, message, millis),
-            Special::CancelTimer { id } => self.check_cancel_timer(id),
+            } => self.check_set_timer(pid, index, message, millis, span),
+            Special::CancelTimer { id } => self.check_cancel_timer(id, span),
             Special::Halt => self.check_halt(span),
             Special::Sleep { millis } => self.check_sleep(millis, span),
             Special::Fix(defs) => self.check_fix(defs),
@@ -244,13 +254,13 @@ impl Checker {
         let Some(first) = param_types.first() else {
             return Err(KslError::new(ErrorKind::InvalidHandlerParam, body.span));
         };
-        let Type::PidT(pid) = first else {
+        let Some(pid_ret) = first.as_pid().map(|(_, ret)| ret) else {
             return Err(KslError::new(ErrorKind::InvalidHandlerParam, body.span));
         };
-        if *pid.ret != ret_ty {
+        if pid_ret != &ret_ty {
             return Err(KslError::with_subject(
                 ErrorKind::TypeMismatch {
-                    expected: (*pid.ret).clone(),
+                    expected: pid_ret.clone(),
                     found: ret_ty,
                 },
                 body.span,
@@ -263,11 +273,53 @@ impl Checker {
         };
         let saved = self.actor.replace(ActorContext {
             handler: handler.clone(),
+            main: false,
         });
         let result = self.check_fn_body_inner(params, &param_types, body, &ret_ty);
         self.actor = saved;
         result?;
-        Ok(InferTy::from_concrete(&Type::HandlerT(Box::new(handler))))
+        Ok(InferTy::from_concrete(&handler.to_type()))
+    }
+
+    /// `@Main`: 仅一个 self 参数, 返回 nil; 体按 Actor 上下文检查.
+    pub(super) fn check_main(
+        &mut self,
+        params: &[crate::ast::Param],
+        ret: &TypeExpr,
+        body: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        let (param_types, ret_ty) = self.fn_signature(params, ret)?;
+        if param_types.len() != 1 {
+            return Err(KslError::new(ErrorKind::InvalidMainParam, span));
+        }
+        let Some(pid_ret) = param_types[0].as_pid().map(|(_, ret)| ret) else {
+            return Err(KslError::new(ErrorKind::InvalidMainParam, span));
+        };
+        if ret_ty != Type::Nil || *pid_ret != Type::Nil {
+            return Err(KslError::new(ErrorKind::InvalidMainReturn, span));
+        }
+        let handler = HandlerType {
+            pid: Box::new(param_types[0].clone()),
+            args: Vec::new(),
+        };
+        let saved = self.actor.replace(ActorContext {
+            handler: handler.clone(),
+            main: true,
+        });
+        let result = self.check_fn_body_inner(params, &param_types, body, &ret_ty);
+        self.actor = saved;
+        result?;
+        Ok(InferTy::from_concrete(&handler.to_type()))
+    }
+
+    /// Actor 原语要求当前位于 Handler 或 Main 体内.
+    fn require_actor(&self, span: Span) -> Result<(), KslError> {
+        if self.actor.is_none() {
+            Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span))
+        } else {
+            Ok(())
+        }
     }
 
     /// `@Continue`: 只允许在 Handler 体内, 参数匹配 Handler 的状态参数.
@@ -279,6 +331,9 @@ impl Checker {
         let Some(actor) = self.actor.clone() else {
             return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
         };
+        if actor.main {
+            return Err(KslError::new(ErrorKind::ContinueInMain, span));
+        }
         let expected = actor.handler.args;
         Self::check_arity(args, expected.len(), span)?;
         for (arg, ty) in args.iter().zip(&expected) {
@@ -310,41 +365,28 @@ impl Checker {
     /// 表达式须为 Pid 类型, 否则报 `NotPid` 错误.
     pub(super) fn expect_pid(&mut self, expr: &Expr) -> Result<PidType, KslError> {
         let ty = self.check_expr(expr)?;
-        match self.infer.finalize(&ty)? {
-            Type::PidT(pid) => Ok(*pid),
-            found => Err(KslError::new(ErrorKind::NotPid { found }, expr.span)),
-        }
+        let found = self.infer.finalize(&ty)?;
+        PidType::from_type(&found)
+            .ok_or_else(|| KslError::new(ErrorKind::NotPid { found }, expr.span))
     }
 
     pub(super) fn check_spawn(
         &mut self,
-        count: &Expr,
         handler: &Expr,
         args: &[Expr],
         span: Span,
     ) -> Result<InferTy, KslError> {
-        let n = Self::literal_index(count, "信箱数")?;
-        self.infer_types.insert(count.key(), InferTy::U8);
+        self.require_actor(span)?;
         let handler_span = handler.span;
         let handler_ty = self.check_expr(handler)?;
         let handler_ty = self.infer.finalize(&handler_ty)?;
-        let handler = match handler_ty {
-            Type::HandlerT(handler) => handler,
-            found => {
-                return Err(KslError::new(ErrorKind::NotHandler { found }, handler_span));
-            },
-        };
-        let Type::PidT(pid) = &*handler.pid else {
-            return Err(KslError::new(ErrorKind::InvalidHandlerType, handler_span));
-        };
-        let expected = pid.mailboxes.len();
-        if n != expected {
+        let Some((pid, handler_args)) = handler_ty.as_handler() else {
             return Err(KslError::new(
-                ErrorKind::SpawnCountMismatch { expected, found: n },
-                count.span,
+                ErrorKind::NotHandler { found: handler_ty },
+                handler_span,
             ));
-        }
-        self.check_args(&handler.args, &Type::PidT(pid.clone()), args, span)
+        };
+        self.check_args(handler_args, pid, args, span)
     }
 
     pub(super) fn check_send(
@@ -352,7 +394,9 @@ impl Checker {
         pid: &Expr,
         index: &Expr,
         message: &Expr,
+        span: Span,
     ) -> Result<InferTy, KslError> {
+        self.require_actor(span)?;
         self.check_send_message(pid, index, message)?;
         Ok(InferTy::Bool)
     }
@@ -384,13 +428,20 @@ impl Checker {
         index: &Expr,
         message: &Expr,
         millis: &Expr,
+        span: Span,
     ) -> Result<InferTy, KslError> {
+        self.require_actor(span)?;
         self.check_send_message(pid, index, message)?;
         self.expect_type(millis, &Type::U64)?;
-        Ok(InferTy::OptionT(Box::new(InferTy::U64)))
+        Ok(InferTy::option(InferTy::U64))
     }
 
-    pub(super) fn check_cancel_timer(&mut self, id: &Expr) -> Result<InferTy, KslError> {
+    pub(super) fn check_cancel_timer(
+        &mut self,
+        id: &Expr,
+        span: Span,
+    ) -> Result<InferTy, KslError> {
+        self.require_actor(span)?;
         self.expect_type(id, &Type::U64)?;
         Ok(InferTy::Bool)
     }
@@ -404,27 +455,27 @@ impl Checker {
         let Some(actor) = self.actor.clone() else {
             return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
         };
-        let Type::PidT(pid) = &*actor.handler.pid else {
+        let Some((mailboxes, _)) = actor.handler.pid.as_pid() else {
             unreachable!("Handler 的 pid 字段已校验为 Pid 类型");
         };
         let i = Self::literal_index(index, "信箱索引")?;
         self.infer_types.insert(index.key(), InferTy::U8);
-        let count = pid.mailboxes.len();
-        let Some(elem) = pid.mailboxes.get(i) else {
+        let count = mailboxes.len();
+        let Some(elem) = mailboxes.get(i) else {
             return Err(KslError::new(
                 ErrorKind::MailboxIndexOutOfRange { index: i, count },
                 index.span,
             ));
         };
-        self.expect_type(timeout, &Type::OptionT(Box::new(Type::U64)))?;
-        Ok(InferTy::OptionT(Box::new(InferTy::from_concrete(elem))))
+        self.expect_type(timeout, &Type::option(Type::U64))?;
+        Ok(InferTy::option(InferTy::from_concrete(elem)))
     }
 
     pub(super) fn check_join(&mut self, pid: &Expr) -> Result<InferTy, KslError> {
         let pid = self.expect_pid(pid)?;
-        Ok(InferTy::ResultT(
-            Box::new(InferTy::from_concrete(pid.ret.as_ref())),
-            Box::new(InferTy::Data(intern("ExitReason"))),
+        Ok(InferTy::result(
+            InferTy::from_concrete(pid.ret.as_ref()),
+            InferTy::data(intern("ExitReason")),
         ))
     }
 
@@ -447,14 +498,13 @@ impl Checker {
             return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
         };
         self.expect_pid(pid)?;
-        let Type::PidT(pid_ty) = &*actor.handler.pid else {
+        let Some((mailboxes, _)) = actor.handler.pid.as_pid() else {
             unreachable!("Handler 的 pid 字段已校验为 Pid 类型");
         };
-        let Some(mailbox) = pid_ty.mailboxes.last() else {
+        let Some(mailbox) = mailboxes.last() else {
             unreachable!("Pid 类型至少包含一个信箱");
         };
-        let notice =
-            Type::Pair(Box::new(Type::U64), Box::new(Type::Data(intern("ExitReason"))));
+        let notice = Type::pair(Type::U64, Type::data(intern("ExitReason")));
         if *mailbox != notice {
             return Err(KslError::with_subject(
                 ErrorKind::TypeMismatch {
@@ -465,7 +515,7 @@ impl Checker {
                 "监视信箱",
             ));
         }
-        Ok(InferTy::OptionT(Box::new(InferTy::U64)))
+        Ok(InferTy::option(InferTy::U64))
     }
 
     pub(super) fn check_unmonitor(
@@ -481,8 +531,11 @@ impl Checker {
     }
 
     pub(super) fn check_halt(&mut self, span: Span) -> Result<InferTy, KslError> {
-        if self.actor.is_none() {
+        let Some(actor) = &self.actor else {
             return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
+        };
+        if actor.main {
+            return Err(KslError::new(ErrorKind::HaltInMain, span));
         }
         Ok(InferTy::Never)
     }

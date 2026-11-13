@@ -107,8 +107,8 @@ pub enum VarKey {
 
 /// 带类型的绑定者.
 ///
-/// 类型在降级期由检查器类型表填入; 抽象机绑定值时忽略类型, 后续分档与
-/// 代码生成读取它.
+/// 类型在降级期由检查器类型表填入; 抽象机绑定值时忽略类型, 线性化保留它
+/// 供函数签名显示.
 #[derive(Debug, Clone)]
 pub struct Binder {
     pub target: Binding,
@@ -142,7 +142,7 @@ pub enum PrimOp {
     DictLiteral,
     SetLiteral,
     Registry(crate::ast::RegistryOp),
-    Spawn { detached: bool },
+    Spawn { detached: bool, mailboxes: usize },
     Send,
     Join,
     Kill,
@@ -202,8 +202,8 @@ pub enum Cps {
     },
     /// 内置原语: 列表/Option 操作与 Actor 操作.
     ///
-    /// `arg_types` 与 `ty` 由检查器类型表填入; 抽象机忽略它们, 分档与代码
-    /// 生成据此选择具体表示.
+    /// `arg_types` 与 `ty` 由检查器类型表填入; 命名注册原语读取 Pid 类型
+    /// 标签, 其余执行路径忽略它们.
     Prim {
         op: PrimOp,
         args: Vec<Value>,
@@ -256,7 +256,7 @@ pub enum Cps {
     Continue { args: Vec<Value> },
     /// 顶层退出.
     Exit(Value),
-    /// Handler 主动停机.
+    /// Handler 主动停止.
     Halt,
     /// 用户主动中断: 断言失败, 主动中止, 尚未实现或不该到达的分支.
     ///

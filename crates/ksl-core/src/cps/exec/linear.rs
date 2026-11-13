@@ -156,7 +156,7 @@ impl Machine {
         Ok(())
     }
 
-    // 终止指令分派集中一处, 平铺便于对照 Terminator 定义.
+    // 终止指令分派; 分支与 Terminator 定义对应.
     #[allow(clippy::too_many_lines)]
     fn step_term(
         &mut self,

@@ -14,13 +14,16 @@ impl Checker {
         span: Span,
         expected: Option<&InferTy>,
     ) -> Result<InferTy, KslError> {
+        if self.actor.is_none() {
+            return Err(KslError::new(ErrorKind::ActorPrimitiveOutsideHandler, span));
+        }
         Self::check_arity(args, op.arity(), span)?;
         match op {
             RegistryOp::Register => {
                 self.check_expr_expect(&args[0], Some(&InferTy::Str))?;
                 let pid = self.check_expr(&args[1])?;
                 let pid = self.infer.finalize(&pid)?;
-                if !matches!(pid, crate::check::Type::PidT(_)) {
+                if !pid.is_pid() {
                     return Err(KslError::new(ErrorKind::NotPid { found: pid }, args[1].span));
                 }
                 Ok(InferTy::Bool)
@@ -36,7 +39,7 @@ impl Checker {
                     ));
                 };
                 let shallow = self.infer.shallow(expected);
-                let InferTy::OptionT(inner) = &shallow else {
+                let Some(inner) = shallow.as_option() else {
                     return Err(KslError::new(
                         ErrorKind::UndeterminedType {
                             detail: "@WhereIs 需要 Option[Pid[...]] 期望类型".to_string(),
@@ -44,7 +47,7 @@ impl Checker {
                         span,
                     ));
                 };
-                if !matches!(self.infer.shallow(inner), InferTy::PidT(_)) {
+                if !self.infer.shallow(inner).is_pid() {
                     return Err(KslError::new(
                         ErrorKind::UndeterminedType {
                             detail: "@WhereIs 需要 Option[Pid[...]] 期望类型".to_string(),

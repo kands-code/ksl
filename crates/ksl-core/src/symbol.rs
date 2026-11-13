@@ -3,8 +3,6 @@
 //! 标识符与类型名在词法层驻留为进程内唯一的 u32; 内表用字符串到编号的哈希表
 //! 与编号到字符串的向量维护双向查找. 全局唯一表加读写锁; 已驻留名走读锁
 //! 快路径, 只有新名才取写锁, 求值热路径因此不争用写锁.
-//!
-//! 插件体系约定: 接口边界只说字符串, Symbol 不外泄, 见 `docs/design.md` 第 14 节.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -91,6 +89,7 @@ pub struct Keywords {
     pub def_: Symbol,
     pub exit_: Symbol,
     pub handler_: Symbol,
+    pub main_: Symbol,
     pub continue_: Symbol,
     pub spawn_: Symbol,
     pub spawn_detached_: Symbol,
@@ -139,6 +138,7 @@ static KEYWORDS: LazyLock<Keywords> = LazyLock::new(|| Keywords {
     def_: intern("Def"),
     exit_: intern("Exit"),
     handler_: intern("Handler"),
+    main_: intern("Main"),
     continue_: intern("Continue"),
     spawn_: intern("Spawn"),
     spawn_detached_: intern("SpawnDetached"),

@@ -375,6 +375,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "main_form"
+        },
+        {
+          "type": "SYMBOL",
           "name": "continue_form"
         },
         {
@@ -790,6 +794,47 @@
         {
           "type": "STRING",
           "value": "Handler"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "param_list"
+        },
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_type"
+        },
+        {
+          "type": "STRING",
+          "value": ","
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_expr"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "main_form": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "@"
+        },
+        {
+          "type": "STRING",
+          "value": "Main"
         },
         {
           "type": "STRING",

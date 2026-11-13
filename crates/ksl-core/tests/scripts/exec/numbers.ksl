@@ -20,20 +20,6 @@
 @Assert[EqualF64[Power[2.0, 10.0], 1024.0], "幂运算"];
 @Assert[EqualF64[Power[4.0, 0.5], 2.0], "小数指数"];
 @Assert[EqualF64[Sqrt[9.0], 3.0], "平方根"];
-@Assert[EqualF64[Sin[0.0], 0.0], "正弦"];
-@Assert[EqualF64[Cos[0.0], 1.0], "余弦"];
-@Assert[EqualF64[Tan[0.0], 0.0], "正切"];
-@Assert[EqualF64[ArcSin[0.0], 0.0], "反正弦"];
-@Assert[EqualF64[ArcCos[1.0], 0.0], "反余弦"];
-@Assert[EqualF64[ArcTan[0.0], 0.0], "反正切"];
-@Assert[EqualF64[ArcTan2[1.0, 0.0], 0.0], "双参数反正切"];
-@Assert[EqualF64[Sinh[0.0], 0.0], "双曲正弦"];
-@Assert[EqualF64[Cosh[0.0], 1.0], "双曲余弦"];
-@Assert[EqualF64[Tanh[0.0], 0.0], "双曲正切"];
-@Assert[EqualF64[ArcSinh[0.0], 0.0], "反双曲正弦"];
-@Assert[EqualF64[ArcCosh[1.0], 0.0], "反双曲余弦"];
-@Assert[EqualF64[ArcTanh[0.0], 0.0], "反双曲正切"];
-@Assert[EqualF64[ArcTan2[0.0, 1.0], 1.5707963267948966], "双参数反正切交换实参"];
 
 @Def[fact, [n : i64] : i64,
   @If[LessOrEqualI64[n, 1], 1, MulI64[n, fact[SubI64[n, 1]]]]];

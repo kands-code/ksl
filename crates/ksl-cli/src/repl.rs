@@ -1,8 +1,8 @@
 //! 交互模式: 逐段读入并求值, 环境跨段持久.
 //!
-//! 输入采用单行编辑加固定行续行: 当前行由内置编辑器就地编辑, 括号或字符串
-//! 未闭合时把当前行固定到终端, 以 `n| ` 继续输入; 完整后整段提交. 命令以
-//! `%` 开头, 不属于语言语法. 结果统一以 `n= ` 前缀显示.
+//! 输入采用多行缓冲: 段内任意行可编辑, 以 `n$ ` 提示焦点行; 括号或字符串
+//! 未闭合时按 Enter 拆行续输, 完整后整段提交. 命令以 `%` 开头, 不属于
+//! 语言语法. 结果统一以 `n= ` 前缀显示.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -33,7 +33,7 @@ pub fn run(file: Option<&Path>, code: Option<&str>) -> ExitCode {
     let mut host = Host::in_current_dir();
 
     if let Some(file) = file {
-        match host.run_file(file) {
+        match host.load_file(file) {
             Ok(outcome) => {
                 for err in &outcome.actor_errors {
                     errln!("{}", render_actor_error(host.sources(), err));
@@ -72,20 +72,9 @@ pub fn run(file: Option<&Path>, code: Option<&str>) -> ExitCode {
 
     let builtins: HashSet<_> = builtin::names().into_iter().collect();
     let mut editor = Editor::new(builtins);
-    // 非空轮次结束后, 在下一个提示符前留一个空行; 管道模式不加.
+    // 非空轮次的输出与结果展示完毕后, 在下一个提示符前留一个空行; 管道模式不加.
     let mut separator = false;
     loop {
-        while ctx.host.pending_input() {
-            ksl_core::io::begin_stdout_tracking();
-            let errors = ctx.host.pump_program();
-            let line_start = ksl_core::io::take_stdout_line_start();
-            if !line_start {
-                outln!();
-            }
-            for err in &errors {
-                errln!("{}", render_actor_error(ctx.host.sources(), err));
-            }
-        }
         if separator && editor.is_interactive() {
             outln!();
         }
@@ -93,6 +82,11 @@ pub fn run(file: Option<&Path>, code: Option<&str>) -> ExitCode {
         match editor.read(round) {
             ReadOutcome::Line(text) => {
                 let empty = text.trim().is_empty();
+                if editor.is_interactive() {
+                    // 输入回显之后固定留一个空白行, 作为输入, 输出与结果
+                    // 区块之间的视觉分割; 空行轮次只有这一个空白行.
+                    outln!();
+                }
                 let outcome = handle_input(&mut ctx, &text, round);
                 // 每次非空输入都占用一个编号, 空行不占.
                 if !empty {

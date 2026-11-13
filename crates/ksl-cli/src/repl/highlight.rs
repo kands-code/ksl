@@ -45,7 +45,7 @@ pub(super) fn line_spans(
         }];
     };
     let mut inks = vec![Ink::Plain; line_len];
-    for token in &tokens {
+    for (index, token) in tokens.iter().enumerate() {
         if matches!(token.kind, TokenKind::Eof) {
             break;
         }
@@ -54,7 +54,7 @@ pub(super) fn line_spans(
         if start >= end {
             continue;
         }
-        let ink = token_ink(&token.kind, builtins);
+        let ink = token_ink_at(&tokens, index, builtins);
         for slot in &mut inks[start - line_start..end - line_start] {
             *slot = ink;
         }
@@ -227,6 +227,8 @@ fn token_ink(kind: &TokenKind, builtins: &HashSet<Symbol>) -> Ink {
         TokenKind::Char(_) | TokenKind::Str(_) | TokenKind::RawStr(_) | TokenKind::FStr(_) => {
             Ink::Green
         },
+        // `@` 与 `^` 是特殊形式与类型提升的前缀记号, 随保留名配色.
+        TokenKind::At | TokenKind::Caret => Ink::Purple,
         TokenKind::Ident(name) => {
             if builtins.contains(name) {
                 Ink::Cyan
@@ -237,6 +239,33 @@ fn token_ink(kind: &TokenKind, builtins: &HashSet<Symbol>) -> Ink {
             }
         },
         _ => Ink::Plain,
+    }
+}
+
+/// 带上下文记元的配色.
+///
+/// 受限名字 `Type/Variant` 按位置区分: 斜杠之前的类型限定部分随保留名
+/// 配色, 斜杠本身与限定部分同色以保持名字为一个视觉单元, 斜杠之后的
+/// 构造器与变体名单独配色; 模式中省略类型限定的 `/Variant` 同样命中.
+fn token_ink_at(tokens: &[Token], index: usize, builtins: &HashSet<Symbol>) -> Ink {
+    let token = &tokens[index];
+    match &token.kind {
+        TokenKind::Slash => Ink::Purple,
+        TokenKind::Ident(name)
+            if tokens
+                .get(index + 1)
+                .is_some_and(|next| matches!(next.kind, TokenKind::Slash)) =>
+        {
+            // 斜杠之前: 受限名字的类型限定部分.
+            Ink::Purple
+        },
+        TokenKind::Ident(_)
+            if index > 0 && matches!(tokens[index - 1].kind, TokenKind::Slash) =>
+        {
+            // 斜杠之后: 构造器与变体名.
+            Ink::Blue
+        },
+        _ => token_ink(&token.kind, builtins),
     }
 }
 
@@ -267,5 +296,33 @@ mod tests {
         let text = "@Block[\n1]";
         let spans = line_spans(text, 8, text.len(), Some(9), &builtins());
         assert!(spans.iter().any(|span| span.ink == Ink::Bracket));
+    }
+
+    #[test]
+    fn special_form_and_type_carets_are_purple() {
+        let text = "@Let[a : ^Shape, 1]";
+        let spans = line_spans(text, 0, text.len(), None, &builtins());
+        assert!(spans.iter().any(|span| span.ink == Ink::Purple));
+    }
+
+    #[test]
+    fn qualified_names_split_by_slash_position() {
+        // Shape 与斜杠相邻同色, 压缩为一个区间; Circle 为蓝色.
+        let text = "Shape/Circle[3.2]";
+        let spans = line_spans(text, 0, text.len(), None, &builtins());
+        let ink_at = |offset| {
+            spans
+                .iter()
+                .find(|span| span.start <= offset && offset < span.end)
+                .map_or(Ink::Plain, |span| span.ink)
+        };
+        assert_eq!(ink_at(0), Ink::Purple, "Shape 的类型限定部分");
+        assert_eq!(ink_at(5), Ink::Purple, "斜杠与限定部分同色");
+        assert_eq!(ink_at(6), Ink::Blue, "Circle 构造器名");
+
+        // 模式里省略类型限定的变体名同样蓝色.
+        let text = "(/Node[x], x)";
+        let spans = line_spans(text, 0, text.len(), None, &builtins());
+        assert!(spans.iter().any(|span| span.ink == Ink::Blue));
     }
 }

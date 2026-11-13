@@ -84,6 +84,25 @@ impl Host {
     ///
     /// 词法, 语法, 类型检查或模块加载错误.
     pub fn run_file(&mut self, file: &Path) -> Result<RunOutcome, KslError> {
+        self.run_file_inner(file, true)
+    }
+
+    /// 加载初始化文件, 执行顶层语句但不运行 `@Main`.
+    ///
+    /// REPL 的初始化文件是模块加载而非直接运行, 只保留导出供交互会话使用.
+    ///
+    /// # Errors
+    ///
+    /// 词法, 语法, 类型检查或模块加载错误.
+    pub fn load_file(&mut self, file: &Path) -> Result<RunOutcome, KslError> {
+        self.run_file_inner(file, false)
+    }
+
+    fn run_file_inner(
+        &mut self,
+        file: &Path,
+        execute_main: bool,
+    ) -> Result<RunOutcome, KslError> {
         // 即使加载失败, 后续交互输入的行内 @Use 仍应以初始化文件所在目录为根.
         self.root_dir = module::root_dir_of(file);
         let mut trial_modules = self.modules.clone();
@@ -92,27 +111,46 @@ impl Host {
             &mut self.sources,
             &mut trial_modules,
         )?;
+        let checkpoint = self.scheduler.snapshot_globals();
         let execution = module::execute_with_cache(
             &mut self.scheduler,
             &graph,
             RootEnv::OnlyExports,
             &mut trial_modules,
         );
-        let actor_errors = self.scheduler.take_actor_errors();
-        match execution {
+        let mut context = None;
+        let mut main_handler = None;
+        let mut main_mailboxes = None;
+        let mut result = match execution {
             Ok(execution) => {
-                self.modules = trial_modules;
-                self.session = Session::from_module_context(execution.context);
-                Ok(RunOutcome {
-                    result: Ok(execution.main_value),
-                    actor_errors,
-                })
+                context = Some(execution.context);
+                main_handler = execution.main_handler;
+                main_mailboxes = execution.main_mailboxes;
+                Ok(execution.main_value)
             },
-            Err(error) => Ok(RunOutcome {
-                result: Err(error),
-                actor_errors,
-            }),
+            Err(error) => Err(error),
+        };
+        if execute_main && let Some(handler) = main_handler {
+            match main_mailboxes {
+                Some(mailboxes) => result = self.scheduler.run_main(handler, mailboxes),
+                None => result = Err(RuntimeError::internal("Main 缺少信箱数")),
+            }
         }
+        let actor_errors = self.scheduler.take_actor_errors();
+        settle_output(&mut result);
+        if result.is_ok() {
+            if let Some(context) = context {
+                self.modules = trial_modules;
+                self.session = Session::from_module_context(context);
+            }
+        } else {
+            // 根 Actor 在模块执行之后才启动, 失败时模块执行已写入的全局绑定也要撤销.
+            self.scheduler.restore_globals(checkpoint);
+        }
+        Ok(RunOutcome {
+            result,
+            actor_errors,
+        })
     }
 
     /// 执行一段脚本代码.
@@ -153,9 +191,8 @@ impl Host {
         session.check(&body)?;
 
         let checkpoint = self.scheduler.snapshot_globals();
-        self.scheduler.begin_root();
-        let result = match &graph {
-            Some(graph) => module::execute_with_cache_in_root(
+        let mut result = match &graph {
+            Some(graph) => module::execute_with_cache(
                 &mut self.scheduler,
                 graph,
                 RootEnv::KeepBindings,
@@ -164,8 +201,8 @@ impl Host {
             .and_then(|_| self.scheduler.run_program_in_root(&body, session.types())),
             None => self.scheduler.run_program_in_root(&body, session.types()),
         };
+        settle_output(&mut result);
         let actor_errors = self.scheduler.take_actor_errors();
-        self.scheduler.finish_root(result.is_ok());
         if result.is_err() {
             self.scheduler.restore_globals(checkpoint);
         } else {
@@ -204,21 +241,6 @@ impl Host {
         self.scheduler.collect_cycles(&roots);
     }
 
-    /// 是否仍有任务在等待标准输入.
-    #[must_use]
-    pub fn pending_input(&self) -> bool {
-        self.scheduler.pending_input() > 0
-    }
-
-    /// 推进 Actor, 直到标准输入请求清空; 返回其间产生的 Actor 错误.
-    pub fn pump_program(&mut self) -> Vec<RuntimeError> {
-        // 模块导出值只由宿主持有, 推进期间自动回收时须作为额外根.
-        self.scheduler.push_extra_roots(self.modules.root_values());
-        self.scheduler.pump_program();
-        self.scheduler.pop_extra_roots();
-        self.scheduler.take_actor_errors()
-    }
-
     /// 求值一段交互输入.
     ///
     /// 输入中的 `@Use` 按所在位置加载并执行; 类型检查在会话副本上进行,
@@ -235,15 +257,17 @@ impl Host {
     /// 清空会话状态; 保留根目录.
     pub fn reset(&mut self) {
         self.scheduler.shutdown();
+        let _ = crate::io::flush_output();
         self.scheduler = Scheduler::new();
         self.session = Session::new();
         self.modules = ModuleCache::new();
         self.sources = Sources::default();
     }
 
-    /// 终止调度器并清理 Actor.
+    /// 终止调度器, 清理 Actor, 并等待已排队的输出写出.
     pub fn shutdown(&mut self) {
         self.scheduler.shutdown();
+        let _ = crate::io::flush_output();
     }
 
     /// 语法与类型检查阶段; 不修改会话与模块缓存.
@@ -313,10 +337,6 @@ impl Host {
             input_types,
         } = prepared;
         let checkpoint = self.scheduler.snapshot_globals();
-        let began_root = !checked.is_empty();
-        if began_root {
-            self.scheduler.begin_root();
-        }
         // 执行中途收集时, 回滚快照只存在于本栈帧.
         self.scheduler.push_extra_env(&checkpoint);
         let mut outcome = Ok(Value::Nil);
@@ -325,7 +345,7 @@ impl Host {
             drop(std::mem::replace(&mut outcome, Ok(Value::Nil)));
             self.scheduler.push_extra_roots(modules.root_values());
             let step_result = match step {
-                CheckedStep::Import(graph) => module::execute_with_cache_in_root(
+                CheckedStep::Import(graph) => module::execute_with_cache(
                     &mut self.scheduler,
                     &graph,
                     RootEnv::KeepBindings,
@@ -346,11 +366,8 @@ impl Host {
             }
         }
         self.scheduler.pop_extra_roots();
+        settle_output(&mut outcome);
         let actor_errors = self.scheduler.take_actor_errors();
-        if began_root {
-            // 多步输入中任一步失败时, 终止本轮全部步骤启动的 Actor.
-            self.scheduler.finish_root(outcome.is_ok());
-        }
         match outcome {
             Ok(value) => {
                 trial.replace_types(input_types);
@@ -408,19 +425,24 @@ pub fn split_uses(program: Program) -> (Vec<Expr>, Program) {
     (uses, Program { stmts: rest, tail })
 }
 
-/// 报告模块之外的导出声明.
+/// 报告模块之外的模块级声明.
 ///
-/// 交互输入与命令行代码都不是模块, 不能声明导出.
+/// 交互输入与命令行代码都不是模块, 不能声明导出或 `@Main`.
 ///
 /// # Errors
 ///
-/// 程序含导出声明时返回对应错误.
+/// 程序含 `@Export` 或 `@Main` 时返回对应错误.
 pub fn reject_export(program: &Program) -> Result<(), KslError> {
     for stmt in program.exprs() {
-        let ExprKind::Special(Special::Export { .. }) = &stmt.node else {
-            continue;
-        };
-        return Err(KslError::new(ErrorKind::ExportOutsideModule, stmt.span));
+        match &stmt.node {
+            ExprKind::Special(Special::Export { .. }) => {
+                return Err(KslError::new(ErrorKind::ExportOutsideModule, stmt.span));
+            },
+            ExprKind::Special(Special::Main { .. }) => {
+                return Err(KslError::new(ErrorKind::MainOutsideModule, stmt.span));
+            },
+            _ => {},
+        }
     }
     Ok(())
 }
@@ -489,45 +511,13 @@ fn split_steps(program: Program) -> Vec<Step> {
     steps
 }
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::*;
-    use crate::testutil::TempDir;
-
-    /// 多步输入中任一步失败时, 本轮更早步骤启动的 Actor 也必须终止.
-    ///
-    /// 模块导入会执行依赖并可能启动 Actor; 随后语句失败时, 若只清理失败
-    /// 步骤自己的 Spawn, 这些 Actor 将变成无法再通过 Pid 访问的孤立任务.
-    #[test]
-    fn failed_input_kills_actors_from_earlier_steps() {
-        let root = TempDir::new("ksl_host_rollback_");
-        fs::create_dir_all(root.path().join("lib")).expect("模块目录应可创建");
-        fs::write(
-            root.path().join("lib/spawn.ksl"),
-            r"
-                @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
-                    @Match[@Receive[0u, Option/None[]], {
-                        (/Some[x], x),
-                        (/None[], 0)
-                    }]]];
-                @Let[p, @SpawnDetached[1u, worker]];
-                @Export[p];
-            ",
-        )
-        .expect("模块文件应可写入");
-
-        let mut host = Host::new(root.path().to_path_buf());
-        let outcome = host
-            .eval_input("<交互>", "@Use[{p}, \"lib/spawn\"]; DivideI64[1, 0]")
-            .expect("输入应可解析与检查");
-        assert!(outcome.result.is_err(), "第二步应失败");
-        assert_eq!(
-            host.scheduler.actor_count(),
-            0,
-            "失败输入应终止本轮启动的全部 Actor"
-        );
-        host.shutdown();
+/// 输出请求是异步的; 在执行边界等待队列清空, 并把首次写出错误并入结果.
+///
+/// 失败结果已有原因时保留原错误, 写出错误不覆盖更深层的主脚本错误.
+fn settle_output<T>(result: &mut Result<T, RuntimeError>) {
+    if let Err(error) = crate::io::flush_output()
+        && result.is_ok()
+    {
+        *result = Err(error);
     }
 }

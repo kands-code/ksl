@@ -9,8 +9,14 @@ use std::sync::LazyLock;
 use crate::symbol::{Symbol, intern, keywords};
 
 /// 内置 Data 类型名; 导出签名检查与保留名共用这一份定义.
-pub const BUILTIN_DATA_TYPE_NAMES: &[&str] =
-    &["ExitReason", "IOError", "TimeError", "KeyEvent"];
+pub const BUILTIN_DATA_TYPE_NAMES: &[&str] = &[
+    "ExitReason",
+    "IOError",
+    "SocketError",
+    "TimeError",
+    "KeyEvent",
+    "IORequest",
+];
 
 /// 内置类型名; 保留名, 编辑器名单与生成脚本共用这一份定义.
 pub const BUILTIN_TYPE_NAMES: &[&str] = &[
@@ -31,10 +37,14 @@ pub const BUILTIN_TYPE_NAMES: &[&str] = &[
     "Handler",
     "ExitReason",
     "IOError",
+    "SocketError",
     "TimeError",
     "KeyEvent",
+    "IORequest",
     "File",
     "DateTime",
+    "Socket",
+    "TcpListener",
 ];
 
 /// 判断名字是否为保留名.
@@ -87,6 +97,7 @@ static NAMES: LazyLock<HashSet<Symbol>> = LazyLock::new(|| {
         kw.todo_,
         kw.unreachable_,
         kw.handler_,
+        kw.main_,
     ]
     .into_iter()
     .collect();

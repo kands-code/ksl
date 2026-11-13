@@ -19,9 +19,7 @@ use crate::value::Value;
 mod exec;
 pub(crate) mod link;
 
-pub use exec::{
-    Execution, RootEnv, execute, execute_with, execute_with_cache, execute_with_cache_in_root,
-};
+pub use exec::{Execution, RootEnv, execute, execute_with, execute_with_cache};
 pub use link::LinkedGraph;
 
 /// 规范化后的模块标识: 根相对路径, 不含 `.ksl`.
@@ -635,7 +633,7 @@ impl<'a> Loader<'a> {
     }
 
     fn module_id(&self, file: &Path) -> ModuleId {
-        let relative = file.strip_prefix(&self.root).unwrap_or(file);
+        let relative = file.trim_prefix(&self.root);
         let mut relative = relative.to_path_buf();
         relative.set_extension("");
         let text = relative.to_string_lossy().replace('\\', "/");
@@ -643,8 +641,7 @@ impl<'a> Loader<'a> {
     }
 
     fn source_name(&self, file: &Path) -> String {
-        file.strip_prefix(&self.root)
-            .unwrap_or(file)
+        file.trim_prefix(&self.root)
             .to_string_lossy()
             .replace('\\', "/")
     }

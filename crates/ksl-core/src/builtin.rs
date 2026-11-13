@@ -13,7 +13,10 @@ use crate::source::Span;
 use crate::value::Value;
 
 /// 内置函数: 与闭包调用共用分派, 额外接收调用点位置.
-/// 内置函数不产生回调; 高阶列表操作由抽象机的续延帧驱动.
+///
+/// 返回 `Result` 是分派签名的统一形态; 不会失败的实现以
+/// `#[allow(clippy::unnecessary_wraps)]` 标注. 内置函数不产生回调;
+/// 高阶列表操作由抽象机的续延帧驱动.
 pub(crate) type BuiltinFn = fn(&[String], &[Value], Option<Span>) -> Result<Value, Error>;
 
 mod meta;
@@ -23,8 +26,8 @@ mod string;
 
 pub(crate) use meta::*;
 pub(crate) use numeric::*;
+pub(crate) use registry::{Builtin, id, name, resolve, signature, symbol};
 pub use registry::{BuiltinId, names};
-pub(crate) use registry::{id, io_builder, lookup, name, signature, symbol};
 pub(crate) use string::*;
 
 #[cfg(test)]

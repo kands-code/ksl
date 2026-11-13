@@ -299,9 +299,9 @@ impl<'a> Lowerer<'a> {
             },
             ExprKind::FStr(parts) => self.lower_fstr(parts, &target),
             ExprKind::List(items) => {
-                let elem = match self.type_of(expr) {
-                    Type::List(elem) => *elem,
-                    other => unreachable!("列表字面量类型应为 List, 实际 {other}"),
+                let ty = self.type_of(expr);
+                let Some(elem) = ty.as_list().cloned() else {
+                    unreachable!("列表字面量类型应为 List, 实际 {ty}");
                 };
                 self.lower_values(items, 0, Vec::new(), &mut |values| {
                     goto(
@@ -348,6 +348,19 @@ impl<'a> Lowerer<'a> {
                     let result_ty = self.type_of(expr);
                     self.lower_call(&callee, args, target, expr.span, result_ty)
                 }
+            },
+            ExprKind::Apply { callee, args } => {
+                let result_ty = self.type_of(expr);
+                let callee_ty = self.type_of(callee);
+                let temp = self.fresh_temp();
+                // 先建以固定临时槽位为被调的调用节点, 再在外层把被调
+                // 表达式求值进该槽位; 调用目标因此可以是任意表达式的结果.
+                let call =
+                    self.lower_call(&Value::Temp(temp), args, target, expr.span, result_ty);
+                self.lower_to(
+                    callee,
+                    Target::Bind(Self::binder(Binding::Temp(temp), callee_ty), Arc::new(call)),
+                )
             },
             ExprKind::Special(special) => {
                 let result_ty = self.type_of(expr);
@@ -464,10 +477,10 @@ impl<'a> Lowerer<'a> {
         let dict_ty = self.type_of(dict);
         let key_ty = self.type_of(key);
         let fn_ty = self.type_of(function);
-        let Type::Dict(_, value_ty) = &dict_ty else {
+        let Some((_, value_ty)) = dict_ty.as_dict() else {
             return goto(target, Value::Nil);
         };
-        let value_ty = (**value_ty).clone();
+        let value_ty = value_ty.clone();
         let dict_name = self.fresh_temp();
         let key_name = self.fresh_temp();
         let option_name = self.fresh_temp();
@@ -475,7 +488,7 @@ impl<'a> Lowerer<'a> {
         let new_name = self.fresh_temp();
         let fn_name = self.fresh_temp();
         let default_name = self.fresh_temp();
-        let option_ty = Type::OptionT(Box::new(value_ty.clone()));
+        let option_ty = Type::option(value_ty.clone());
         let dict_binder = Self::binder(Binding::Temp(dict_name), dict_ty.clone());
         let key_binder = Self::binder(Binding::Temp(key_name), key_ty.clone());
         let fn_binder = Self::binder(Binding::Temp(fn_name), fn_ty);
@@ -573,7 +586,7 @@ impl<'a> Lowerer<'a> {
         let key_name = self.fresh_temp();
         let option_name = self.fresh_temp();
         let value_name = self.fresh_temp();
-        let option_ty = Type::OptionT(Box::new(result_ty.clone()));
+        let option_ty = Type::option(result_ty.clone());
         let dict_binder = Self::binder(Binding::Temp(dict_name), dict_ty.clone());
         let key_binder = Self::binder(Binding::Temp(key_name), key_ty.clone());
         let value_binder = Self::binder(Binding::Temp(value_name), result_ty.clone());
@@ -726,6 +739,11 @@ impl<'a> Lowerer<'a> {
             Special::Handler { params, ret, body } => {
                 let function =
                     self.lower_function("$handler", params, ret, body, FunctionKind::Handler);
+                goto(target, Value::Func(function))
+            },
+            Special::Main { params, ret, body } => {
+                let function =
+                    self.lower_function("$main", params, ret, body, FunctionKind::Handler);
                 goto(target, Value::Func(function))
             },
             Special::Continue { .. }
@@ -881,18 +899,20 @@ impl<'a> Lowerer<'a> {
                 })
             },
             Special::Spawn {
-                count,
                 handler,
                 args,
                 detached,
             } => {
-                let mut exprs = Vec::with_capacity(args.len() + 2);
-                exprs.push(count.as_ref().clone());
+                let Some((mailboxes, _)) = result_ty.as_pid() else {
+                    unreachable!("Spawn 的结果类型应为 Pid, 实际 {result_ty}");
+                };
+                let mut exprs = Vec::with_capacity(args.len() + 1);
                 exprs.push(handler.as_ref().clone());
                 exprs.extend(args.iter().cloned());
                 self.lower_prim(
                     PrimOp::Spawn {
                         detached: *detached,
+                        mailboxes: mailboxes.len(),
                     },
                     &exprs,
                     target,
@@ -915,7 +935,7 @@ impl<'a> Lowerer<'a> {
             Special::Receive { index, timeout } => {
                 let index = literal_usize(index).expect("检查器已校验信箱索引为字面量");
                 let timeout_name = self.fresh_temp();
-                let timeout_ty = Type::OptionT(Box::new(Type::U64));
+                let timeout_ty = Type::option(Type::U64);
                 let cont = self.result_cont(target, result_ty);
                 let receive = Cps::Receive {
                     index,

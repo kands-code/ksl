@@ -64,10 +64,9 @@ struct Collector<'a> {
 impl Collector<'_> {
     /// 遍历 CPS 树并收集自由变量.
     ///
-    /// 用显式栈代替递归: 只有一个后续的链在循环内直接下沉, 分支节点把
-    /// 待处理分支压栈; 记录顺序仍与先序遍历一致. 长语句序列与长续延链
-    /// 不再受调用栈深度限制. 作用域使用持久化集合, 逐条绑定只做结构共享,
-    /// 不会因长序列产生 O(n²) 的集合复制.
+    /// 只有一个后续的链在循环内直接下沉, 分支节点把待处理分支压栈; 记录
+    /// 顺序与先序遍历一致. 长语句序列与长续延链不受调用栈深度限制. 作用域
+    /// 使用持久化集合, 逐条绑定只做结构共享, 不复制已有绑定.
     #[allow(clippy::too_many_lines)]
     fn cps(&mut self, cps: &Cps, bound: &imbl::HashSet<Symbol>) {
         let mut pending: Vec<(&Cps, imbl::HashSet<Symbol>)> = vec![(cps, bound.clone())];

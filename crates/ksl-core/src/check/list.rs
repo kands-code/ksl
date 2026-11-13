@@ -27,10 +27,10 @@ impl Checker {
         span: Span,
         context: &'static str,
     ) -> InferTy {
-        match expected {
-            Some(InferTy::List(inner)) => (**inner).clone(),
-            _ => self.infer.fresh(span, context),
-        }
+        expected
+            .and_then(InferTy::as_list)
+            .cloned()
+            .unwrap_or_else(|| self.infer.fresh(span, context))
     }
 
     /// 外层期望给出结果类型时取之, 否则新建类型变量.
@@ -59,14 +59,14 @@ impl Checker {
         match op {
             K::Get => {
                 let result = self.expected_or_fresh(expected, span, "@ListGet 结果");
-                let list = InferTy::List(Box::new(result.clone()));
+                let list = InferTy::list(result.clone());
                 self.check_expr_expect(&args[0], Some(&list))?;
                 self.expect_type(&args[1], &Type::U64)?;
                 Ok(result)
             },
             K::Update => {
                 let elem = self.list_elem(expected, span, "列表元素");
-                let list = InferTy::List(Box::new(elem.clone()));
+                let list = InferTy::list(elem.clone());
                 self.check_expr_expect(&args[0], Some(&list))?;
                 self.expect_type(&args[1], &Type::U64)?;
                 self.check_expr_expect(&args[2], Some(&elem))?;
@@ -75,7 +75,7 @@ impl Checker {
             },
             K::Riffle => {
                 let elem = self.list_elem(expected, span, "列表元素");
-                let list = InferTy::List(Box::new(elem.clone()));
+                let list = InferTy::list(elem.clone());
                 self.check_expr_expect(&args[0], Some(&list))?;
                 self.check_expr_expect(&args[1], Some(&elem))?;
                 self.expect_type(&args[2], &Type::U64)?;
@@ -84,7 +84,7 @@ impl Checker {
             },
             K::Repeat => {
                 let elem = self.list_elem(expected, span, "Repeat 元素");
-                let list = InferTy::List(Box::new(elem.clone()));
+                let list = InferTy::list(elem.clone());
                 self.check_expr_expect(&args[0], Some(&elem))?;
                 self.expect_type(&args[1], &Type::U64)?;
                 self.unify_expected(expected, &list, span)?;
@@ -92,7 +92,7 @@ impl Checker {
             },
             K::Prepend | K::Append => {
                 let elem = self.list_elem(expected, span, "列表元素");
-                let list = InferTy::List(Box::new(elem.clone()));
+                let list = InferTy::list(elem.clone());
                 self.check_expr_expect(&args[0], Some(&list))?;
                 self.check_expr_expect(&args[1], Some(&elem))?;
                 self.unify_expected(expected, &list, span)?;
@@ -100,7 +100,7 @@ impl Checker {
             },
             K::Concat => {
                 let elem = self.list_elem(expected, span, "列表元素");
-                let list = InferTy::List(Box::new(elem.clone()));
+                let list = InferTy::list(elem.clone());
                 self.check_expr_expect(&args[0], Some(&list))?;
                 self.check_expr_expect(&args[1], Some(&list))?;
                 self.unify_expected(expected, &list, span)?;
@@ -108,13 +108,13 @@ impl Checker {
             },
             K::Head => {
                 let result = self.expected_or_fresh(expected, span, "@ListHead 结果");
-                let list = InferTy::List(Box::new(result.clone()));
+                let list = InferTy::list(result.clone());
                 self.check_expr_expect(&args[0], Some(&list))?;
                 Ok(result)
             },
             K::Tail | K::Take | K::Drop | K::Reverse => {
                 let elem = self.list_elem(expected, span, "列表元素");
-                let list = InferTy::List(Box::new(elem));
+                let list = InferTy::list(elem);
                 self.check_expr_expect(&args[0], Some(&list))?;
                 if matches!(op, K::Take | K::Drop) {
                     self.expect_type(&args[1], &Type::U64)?;
@@ -124,45 +124,39 @@ impl Checker {
             },
             K::Length => {
                 let elem = self.infer.fresh(span, "列表元素");
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(elem))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(elem)))?;
                 Ok(InferTy::U64)
             },
             K::Flatten => {
                 let elem = self.list_elem(expected, span, "Flatten 元素");
-                let list = InferTy::List(Box::new(elem.clone()));
-                self.check_expr_expect(
-                    &args[0],
-                    Some(&InferTy::List(Box::new(InferTy::List(Box::new(elem))))),
-                )?;
+                let list = InferTy::list(elem.clone());
+                self.check_expr_expect(&args[0], Some(&InferTy::list(InferTy::list(elem))))?;
                 self.unify_expected(expected, &list, span)?;
                 Ok(list)
             },
             K::Chunk => {
                 let elem = self.infer.fresh(span, "Chunk 元素");
-                let result = InferTy::List(Box::new(InferTy::List(Box::new(elem.clone()))));
+                let result = InferTy::list(InferTy::list(elem.clone()));
                 self.unify_expected(expected, &result, span)?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(elem))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(elem)))?;
                 self.expect_type(&args[1], &Type::U64)?;
                 Ok(result)
             },
             K::Window => {
                 let elem = self.infer.fresh(span, "窗口元素");
-                let result = InferTy::List(Box::new(InferTy::List(Box::new(elem.clone()))));
+                let result = InferTy::list(InferTy::list(elem.clone()));
                 self.unify_expected(expected, &result, span)?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(elem))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(elem)))?;
                 self.expect_type(&args[1], &Type::U64)?;
                 Ok(result)
             },
             K::Zip => {
                 let first = self.infer.fresh(span, "Zip 首列表元素");
                 let second = self.infer.fresh(span, "Zip 次列表元素");
-                let result = InferTy::List(Box::new(InferTy::Pair(
-                    Box::new(first.clone()),
-                    Box::new(second.clone()),
-                )));
+                let result = InferTy::list(InferTy::pair(first.clone(), second.clone()));
                 self.unify_expected(expected, &result, span)?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(first))))?;
-                self.check_expr_expect(&args[1], Some(&InferTy::List(Box::new(second))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(first)))?;
+                self.check_expr_expect(&args[1], Some(&InferTy::list(second)))?;
                 Ok(result)
             },
             K::TakeWhile
@@ -191,9 +185,9 @@ impl Checker {
         let result = self.expected_or_fresh(expected, span, "配对访问结果");
         let other = self.infer.fresh(span, "配对另一分量");
         let pair = if matches!(op, K::Fst) {
-            InferTy::Pair(Box::new(result.clone()), Box::new(other))
+            InferTy::pair(result.clone(), other)
         } else {
-            InferTy::Pair(Box::new(other), Box::new(result.clone()))
+            InferTy::pair(other, result.clone())
         };
         self.check_expr_expect(&args[0], Some(&pair))?;
         Ok(result)
@@ -211,7 +205,7 @@ impl Checker {
         match op {
             K::TakeWhile | K::DropWhile | K::Filter => {
                 let elem = self.list_elem(expected, span, "列表元素");
-                let list = InferTy::List(Box::new(elem.clone()));
+                let list = InferTy::list(elem.clone());
                 let predicate = InferTy::Fn(vec![elem], Box::new(InferTy::Bool));
                 self.check_expr_expect(&args[1], Some(&predicate))?;
                 self.check_expr_expect(&args[0], Some(&list))?;
@@ -219,16 +213,16 @@ impl Checker {
                 Ok(list)
             },
             K::Map => {
-                let out = match expected {
-                    Some(InferTy::List(inner)) => (**inner).clone(),
-                    _ => self.infer.fresh(span, "@ListMap 结果元素"),
-                };
-                let result = InferTy::List(Box::new(out.clone()));
+                let out = expected
+                    .and_then(InferTy::as_list)
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(span, "@ListMap 结果元素"));
+                let result = InferTy::list(out.clone());
                 self.unify_expected(expected, &result, span)?;
                 let input = self.infer.fresh(span, "@ListMap 输入元素");
                 let function = InferTy::Fn(vec![input.clone()], Box::new(out));
                 self.check_expr_expect(&args[1], Some(&function))?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(input))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(input)))?;
                 Ok(result)
             },
             K::Fold => {
@@ -238,57 +232,57 @@ impl Checker {
                     InferTy::Fn(vec![input.clone(), result.clone()], Box::new(result.clone()));
                 self.check_expr_expect(&args[1], Some(&function))?;
                 self.check_expr_expect(&args[2], Some(&result))?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(input))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(input)))?;
                 Ok(result)
             },
             K::MapIndexed => {
-                let out = match expected {
-                    Some(InferTy::List(inner)) => (**inner).clone(),
-                    _ => self.infer.fresh(span, "@ListMapIndexed 结果元素"),
-                };
-                let result = InferTy::List(Box::new(out.clone()));
+                let out = expected
+                    .and_then(InferTy::as_list)
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(span, "@ListMapIndexed 结果元素"));
+                let result = InferTy::list(out.clone());
                 self.unify_expected(expected, &result, span)?;
                 let input = self.infer.fresh(span, "@ListMapIndexed 输入元素");
                 let function = InferTy::Fn(vec![InferTy::U64, input.clone()], Box::new(out));
                 self.check_expr_expect(&args[1], Some(&function))?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(input))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(input)))?;
                 Ok(result)
             },
             K::PrefixFold => {
-                let out = match expected {
-                    Some(InferTy::List(inner)) => (**inner).clone(),
-                    _ => self.infer.fresh(span, "@ListPrefixFold 结果元素"),
-                };
-                let result = InferTy::List(Box::new(out.clone()));
+                let out = expected
+                    .and_then(InferTy::as_list)
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(span, "@ListPrefixFold 结果元素"));
+                let result = InferTy::list(out.clone());
                 self.unify_expected(expected, &result, span)?;
                 let input = self.infer.fresh(span, "@ListPrefixFold 输入元素");
                 let function =
                     InferTy::Fn(vec![input.clone(), out.clone()], Box::new(out.clone()));
                 self.check_expr_expect(&args[1], Some(&function))?;
                 self.check_expr_expect(&args[2], Some(&out))?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(input))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(input)))?;
                 Ok(result)
             },
             K::ZipWith => {
-                let out = match expected {
-                    Some(InferTy::List(inner)) => (**inner).clone(),
-                    _ => self.infer.fresh(span, "@ZipWith 结果元素"),
-                };
-                let result = InferTy::List(Box::new(out.clone()));
+                let out = expected
+                    .and_then(InferTy::as_list)
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(span, "@ZipWith 结果元素"));
+                let result = InferTy::list(out.clone());
                 self.unify_expected(expected, &result, span)?;
                 let first = self.infer.fresh(span, "ZipWith 首列表元素");
                 let second = self.infer.fresh(span, "ZipWith 次列表元素");
                 let function = InferTy::Fn(vec![first.clone(), second.clone()], Box::new(out));
                 self.check_expr_expect(&args[2], Some(&function))?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(first))))?;
-                self.check_expr_expect(&args[1], Some(&InferTy::List(Box::new(second))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(first)))?;
+                self.check_expr_expect(&args[1], Some(&InferTy::list(second)))?;
                 Ok(result)
             },
             K::Any | K::All => {
                 let input = self.infer.fresh(span, "判定输入元素");
                 let function = InferTy::Fn(vec![input.clone()], Box::new(InferTy::Bool));
                 self.check_expr_expect(&args[1], Some(&function))?;
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(input))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(input)))?;
                 Ok(InferTy::Bool)
             },
             _ => unreachable!("调用处已限定高阶操作种类"),

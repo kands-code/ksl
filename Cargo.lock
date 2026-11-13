@@ -334,6 +334,7 @@ dependencies = [
  "indexmap",
  "jiff",
  "ksl-macros",
+ "mio",
  "parking_lot 0.13.0",
  "unicode-ident",
  "unicode-segmentation",

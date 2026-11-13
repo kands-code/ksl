@@ -47,7 +47,7 @@ const REGISTRY_OPS = ['Register', 'WhereIs', 'Unregister'];
 
 /// 标识符: 一个以上下划线后接 XID_Start, 后续字符为 XID_Continue.
 ///
-/// 纯下划线序列不是标识符, 而是抛弃记号 `_`.
+/// 纯下划线序列不是标识符, 而是丢弃记号 `_`.
 const IDENTIFIER = new RustRegex('_*\\p{XID_Start}\\p{XID_Continue}*');
 
 /// 逗号分隔的非空序列.
@@ -128,7 +128,7 @@ module.exports = grammar({
 
     special_form: $ => choice(
       $.let_form, $.block_form, $.if_form, $.fn_form, $.def_form, $.exit_form,
-      $.handler_form, $.continue_form, $.spawn_form, $.send_form, $.receive_form,
+      $.handler_form, $.main_form, $.continue_form, $.spawn_form, $.send_form, $.receive_form,
       $.join_form, $.kill_form, $.monitor_form, $.unmonitor_form, $.pid_serial_form,
       $.set_timer_form, $.cancel_timer_form, $.halt_form, $.sleep_form, $.fix_form,
       $.data_form, $.export_form, $.use_form, $.match_form,
@@ -155,6 +155,9 @@ module.exports = grammar({
     exit_form: $ => seq('@', 'Exit', '[', $._expr, ']'),
     handler_form: $ => seq(
       '@', 'Handler', '[', $.param_list, ':', $._type, ',', $._expr, ']',
+    ),
+    main_form: $ => seq(
+      '@', 'Main', '[', $.param_list, ':', $._type, ',', $._expr, ']',
     ),
     continue_form: $ => seq('@', 'Continue', '[', commaSep($._expr), ']'),
     spawn_form: $ => seq(

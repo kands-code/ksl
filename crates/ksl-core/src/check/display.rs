@@ -5,9 +5,9 @@ use std::fmt;
 use super::types::Type;
 use crate::ast::NodeKey;
 use crate::rewrite::TypeNames;
-use crate::symbol::{Symbol, resolve};
+use crate::symbol::{Symbol, keywords, resolve};
 
-/// 节点身份到已解析类型的类型表; 供 LSP 与后续代码生成使用.
+/// 节点身份到已解析类型的类型表; 供 LSP 与 IR 降级使用.
 ///
 /// 会话每轮输入都会合并历史类型表, 使用持久化映射让克隆与增量扩展
 /// 保持结构共享, 避免长会话中反复复制整张表.
@@ -32,17 +32,29 @@ pub fn is_base_printable(ty: &Type) -> bool {
 /// 该类型是否可以打印.
 ///
 /// Pid, 函数与 Handler 可作为顶层值显示; List 与 Pair 仅允许一层基础元素;
-/// Data, Option, Result, Dict, Set, `File` 与 `DateTime` 不可打印.
+/// Data, Option, Result, Dict, Set 与不透明类型不可打印.
 #[must_use]
 pub fn is_printable(ty: &Type) -> bool {
-    if is_base_printable(ty) || matches!(ty, Type::PidT(_) | Type::Fn(..) | Type::HandlerT(_)) {
+    if is_base_printable(ty) || matches!(ty, Type::Fn(..)) {
         return true;
     }
-    match ty {
-        Type::List(inner) => is_base_printable(inner),
-        Type::Pair(first, second) => is_base_printable(first) && is_base_printable(second),
-        _ => false,
+    if let Some((name, args)) = ty.as_app() {
+        let kw = keywords();
+        if name == kw.pid_ || name == kw.handler_ {
+            return true;
+        }
+        if name == kw.list_
+            && let [inner] = args
+        {
+            return is_base_printable(inner);
+        }
+        if name == kw.pair_
+            && let [first, second] = args
+        {
+            return is_base_printable(first) && is_base_printable(second);
+        }
     }
+    false
 }
 
 /// 按会话别名表显示类型; 找不到别名时使用真实类型名.
@@ -82,39 +94,20 @@ impl fmt::Display for TypeFormatter<'_> {
             Type::Str => f.write_str("string"),
             Type::Nil => f.write_str("nil"),
             Type::Never => f.write_str("never"),
-            Type::File => f.write_str("File"),
-            Type::DateTime => f.write_str("DateTime"),
-            Type::Data(name) => {
-                let name = self.names.map_or(*name, |names| nominal_name(*name, names));
-                f.write_str(&resolve(name))
-            },
-            Type::List(inner) => write!(f, "List[{}]", self.nested(inner)),
-            Type::Dict(key, value) => {
-                write!(f, "Dict[{}, {}]", self.nested(key), self.nested(value))
-            },
-            Type::Set(inner) => write!(f, "Set[{}]", self.nested(inner)),
-            Type::OptionT(inner) => write!(f, "Option[{}]", self.nested(inner)),
-            Type::ResultT(ok, err) => {
-                write!(f, "Result[{}, {}]", self.nested(ok), self.nested(err))
-            },
-            Type::Pair(first, second) => {
-                write!(f, "Pair[{}, {}]", self.nested(first), self.nested(second))
-            },
-            Type::PidT(pid) => {
-                f.write_str("Pid[")?;
-                write_types(f, &pid.mailboxes, self.names)?;
-                if !pid.mailboxes.is_empty() {
-                    f.write_str(", ")?;
+            Type::Opaque(name) => f.write_str(&resolve(*name)),
+            Type::App { name, args } => {
+                let name = if args.is_empty() {
+                    self.names.map_or(*name, |names| nominal_name(*name, names))
+                } else {
+                    *name
+                };
+                f.write_str(&resolve(name))?;
+                if !args.is_empty() {
+                    f.write_str("[")?;
+                    write_types(f, args, self.names)?;
+                    f.write_str("]")?;
                 }
-                write!(f, "{}]", self.nested(&pid.ret))
-            },
-            Type::HandlerT(handler) => {
-                f.write_str("Handler[")?;
-                write!(f, "{}", self.nested(&handler.pid))?;
-                for arg in &handler.args {
-                    write!(f, ", {}", self.nested(arg))?;
-                }
-                f.write_str("]")
+                Ok(())
             },
             Type::Fn(params, ret) => {
                 f.write_str("Fn[[")?;

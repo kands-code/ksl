@@ -96,6 +96,8 @@ pub fn format_value(value: &Value, spec: Option<&str>) -> Result<String, Error> 
         | Value::Dict(_)
         | Value::Set(_)
         | Value::File(_)
+        | Value::Socket(_)
+        | Value::TcpListener(_)
         | Value::DateTime(_) => Err(Error::internal("该类型不可打印")),
     }
 }
@@ -153,6 +155,8 @@ fn render_structural(value: &Value) -> String {
         Value::Data(data) => format!("<{}>", resolve(data.ty)),
         Value::Nil => "nil".to_string(),
         Value::File(_) => "<File>".to_string(),
+        Value::Socket(_) => "<Socket>".to_string(),
+        Value::TcpListener(_) => "<TcpListener>".to_string(),
         Value::DateTime(_) => "<DateTime>".to_string(),
         Value::Pid(pid) => format!("<Pid {}>", pid.id),
         Value::Dict(_) => "<Dict>".to_string(),

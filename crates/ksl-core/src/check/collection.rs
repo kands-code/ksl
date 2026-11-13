@@ -18,19 +18,21 @@ impl Checker {
         expected: Option<&InferTy>,
     ) -> Result<InferTy, KslError> {
         let expected = expected.map(|ty| self.infer.shallow(ty));
-        let (key, value) = match expected.as_ref() {
-            Some(InferTy::Dict(key, value)) => ((**key).clone(), (**value).clone()),
-            _ => (
-                self.infer.fresh(span, "@Dict 键"),
-                self.infer.fresh(span, "@Dict 值"),
-            ),
-        };
-        let pair = InferTy::Pair(Box::new(key.clone()), Box::new(value.clone()));
+        let (key, value) =
+            if let Some((key, value)) = expected.as_ref().and_then(InferTy::as_dict) {
+                (key.clone(), value.clone())
+            } else {
+                (
+                    self.infer.fresh(span, "@Dict 键"),
+                    self.infer.fresh(span, "@Dict 值"),
+                )
+            };
+        let pair = InferTy::pair(key.clone(), value.clone());
         for entry in entries {
             self.check_expr_expect(entry, Some(&pair))?;
         }
         self.ensure_dict_key(&key, span)?;
-        Ok(InferTy::Dict(Box::new(key), Box::new(value)))
+        Ok(InferTy::dict(key, value))
     }
 
     /// `@Set[value, ...]` 字面量.
@@ -41,15 +43,16 @@ impl Checker {
         expected: Option<&InferTy>,
     ) -> Result<InferTy, KslError> {
         let expected = expected.map(|ty| self.infer.shallow(ty));
-        let elem = match expected.as_ref() {
-            Some(InferTy::Set(inner)) => (**inner).clone(),
-            _ => self.infer.fresh(span, "@Set 元素"),
-        };
+        let elem = expected
+            .as_ref()
+            .and_then(InferTy::as_set)
+            .cloned()
+            .unwrap_or_else(|| self.infer.fresh(span, "@Set 元素"));
         for item in items {
             self.check_expr_expect(item, Some(&elem))?;
         }
         self.ensure_dict_key(&elem, span)?;
-        Ok(InferTy::Set(Box::new(elem)))
+        Ok(InferTy::set(elem))
     }
 
     /// Dict 操作的类型规则.
@@ -65,21 +68,21 @@ impl Checker {
         Self::check_arity(args, op.arity(), span)?;
         match op {
             K::Lookup => {
-                let value = match expected {
-                    Some(InferTy::OptionT(inner)) => (**inner).clone(),
-                    _ => self.infer.fresh(span, "@DictLookup 结果"),
-                };
+                let value = expected
+                    .and_then(InferTy::as_option)
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(span, "@DictLookup 结果"));
                 let key = self.infer.fresh(span, "@DictLookup 键");
-                let dict = InferTy::Dict(Box::new(key.clone()), Box::new(value.clone()));
+                let dict = InferTy::dict(key.clone(), value.clone());
                 self.check_expr_expect(&args[0], Some(&dict))?;
                 self.check_expr_expect(&args[1], Some(&key))?;
                 self.ensure_dict_key(&key, span)?;
-                Ok(InferTy::OptionT(Box::new(value)))
+                Ok(InferTy::option(value))
             },
             K::Get => {
                 let value = self.expected_or_fresh(expected, span, "@DictGet 结果");
                 let key = self.infer.fresh(span, "@DictGet 键");
-                let dict = InferTy::Dict(Box::new(key.clone()), Box::new(value.clone()));
+                let dict = InferTy::dict(key.clone(), value.clone());
                 self.check_expr_expect(&args[0], Some(&dict))?;
                 self.check_expr_expect(&args[1], Some(&key))?;
                 self.check_expr_expect(&args[2], Some(&value))?;
@@ -87,14 +90,16 @@ impl Checker {
                 Ok(value)
             },
             K::Update => {
-                let (key, value) = match expected {
-                    Some(InferTy::Dict(key, value)) => ((**key).clone(), (**value).clone()),
-                    _ => (
-                        self.infer.fresh(span, "@DictUpdate 键"),
-                        self.infer.fresh(span, "@DictUpdate 值"),
-                    ),
-                };
-                let dict = InferTy::Dict(Box::new(key.clone()), Box::new(value.clone()));
+                let (key, value) =
+                    if let Some((key, value)) = expected.and_then(InferTy::as_dict) {
+                        (key.clone(), value.clone())
+                    } else {
+                        (
+                            self.infer.fresh(span, "@DictUpdate 键"),
+                            self.infer.fresh(span, "@DictUpdate 值"),
+                        )
+                    };
+                let dict = InferTy::dict(key.clone(), value.clone());
                 let function = InferTy::Fn(vec![value.clone()], Box::new(value.clone()));
                 self.check_expr_expect(&args[0], Some(&dict))?;
                 self.check_expr_expect(&args[1], Some(&key))?;
@@ -104,14 +109,16 @@ impl Checker {
                 Ok(dict)
             },
             K::Put => {
-                let (key, value) = match expected {
-                    Some(InferTy::Dict(key, value)) => ((**key).clone(), (**value).clone()),
-                    _ => (
-                        self.infer.fresh(span, "@DictPut 键"),
-                        self.infer.fresh(span, "@DictPut 值"),
-                    ),
-                };
-                let dict = InferTy::Dict(Box::new(key.clone()), Box::new(value.clone()));
+                let (key, value) =
+                    if let Some((key, value)) = expected.and_then(InferTy::as_dict) {
+                        (key.clone(), value.clone())
+                    } else {
+                        (
+                            self.infer.fresh(span, "@DictPut 键"),
+                            self.infer.fresh(span, "@DictPut 值"),
+                        )
+                    };
+                let dict = InferTy::dict(key.clone(), value.clone());
                 self.check_expr_expect(&args[0], Some(&dict))?;
                 self.check_expr_expect(&args[1], Some(&key))?;
                 self.check_expr_expect(&args[2], Some(&value))?;
@@ -121,7 +128,7 @@ impl Checker {
             K::Remove => {
                 let key = self.infer.fresh(span, "@DictRemove 键");
                 let value = self.infer.fresh(span, "@DictRemove 值");
-                let dict = InferTy::Dict(Box::new(key.clone()), Box::new(value));
+                let dict = InferTy::dict(key.clone(), value);
                 self.check_expr_expect(&args[0], Some(&dict))?;
                 self.check_expr_expect(&args[1], Some(&key))?;
                 self.ensure_dict_key(&key, span)?;
@@ -130,7 +137,7 @@ impl Checker {
             K::Has => {
                 let key = self.infer.fresh(span, "@DictHas 键");
                 let value = self.infer.fresh(span, "@DictHas 值");
-                let dict = InferTy::Dict(Box::new(key.clone()), Box::new(value));
+                let dict = InferTy::dict(key.clone(), value);
                 self.check_expr_expect(&args[0], Some(&dict))?;
                 self.check_expr_expect(&args[1], Some(&key))?;
                 self.ensure_dict_key(&key, span)?;
@@ -139,10 +146,7 @@ impl Checker {
             K::Length => {
                 let key = self.infer.fresh(span, "@DictLength 键");
                 let value = self.infer.fresh(span, "@DictLength 值");
-                self.check_expr_expect(
-                    &args[0],
-                    Some(&InferTy::Dict(Box::new(key), Box::new(value))),
-                )?;
+                self.check_expr_expect(&args[0], Some(&InferTy::dict(key, value)))?;
                 Ok(InferTy::U64)
             },
             K::Entries => {
@@ -150,37 +154,28 @@ impl Checker {
                 let value = self.infer.fresh(span, "@DictEntries 值");
                 self.check_expr_expect(
                     &args[0],
-                    Some(&InferTy::Dict(Box::new(key.clone()), Box::new(value.clone()))),
+                    Some(&InferTy::dict(key.clone(), value.clone())),
                 )?;
                 self.ensure_dict_key(&key, span)?;
-                Ok(InferTy::List(Box::new(InferTy::Pair(
-                    Box::new(key),
-                    Box::new(value),
-                ))))
+                Ok(InferTy::list(InferTy::pair(key, value)))
             },
             K::Keys => {
                 let key = self.infer.fresh(span, "@DictKeys 键");
                 let value = self.infer.fresh(span, "@DictKeys 值");
-                self.check_expr_expect(
-                    &args[0],
-                    Some(&InferTy::Dict(Box::new(key.clone()), Box::new(value))),
-                )?;
+                self.check_expr_expect(&args[0], Some(&InferTy::dict(key.clone(), value)))?;
                 self.ensure_dict_key(&key, span)?;
-                Ok(InferTy::List(Box::new(key)))
+                Ok(InferTy::list(key))
             },
             K::Values => {
                 let key = self.infer.fresh(span, "@DictValues 键");
                 let value = self.infer.fresh(span, "@DictValues 值");
-                self.check_expr_expect(
-                    &args[0],
-                    Some(&InferTy::Dict(Box::new(key), Box::new(value.clone()))),
-                )?;
-                Ok(InferTy::List(Box::new(value)))
+                self.check_expr_expect(&args[0], Some(&InferTy::dict(key, value.clone())))?;
+                Ok(InferTy::list(value))
             },
             K::Filter => {
                 let key = self.infer.fresh(span, "@DictFilter 键");
                 let value = self.infer.fresh(span, "@DictFilter 值");
-                let dict = InferTy::Dict(Box::new(key.clone()), Box::new(value.clone()));
+                let dict = InferTy::dict(key.clone(), value.clone());
                 let predicate =
                     InferTy::Fn(vec![key.clone(), value.clone()], Box::new(InferTy::Bool));
                 self.check_expr_expect(&args[0], Some(&dict))?;
@@ -189,14 +184,16 @@ impl Checker {
                 Ok(dict)
             },
             K::Merge => {
-                let (key, value) = match expected {
-                    Some(InferTy::Dict(key, value)) => ((**key).clone(), (**value).clone()),
-                    _ => (
-                        self.infer.fresh(span, "@DictMerge 键"),
-                        self.infer.fresh(span, "@DictMerge 值"),
-                    ),
-                };
-                let dict = InferTy::Dict(Box::new(key.clone()), Box::new(value.clone()));
+                let (key, value) =
+                    if let Some((key, value)) = expected.and_then(InferTy::as_dict) {
+                        (key.clone(), value.clone())
+                    } else {
+                        (
+                            self.infer.fresh(span, "@DictMerge 键"),
+                            self.infer.fresh(span, "@DictMerge 值"),
+                        )
+                    };
+                let dict = InferTy::dict(key.clone(), value.clone());
                 self.check_expr_expect(&args[0], Some(&dict))?;
                 self.check_expr_expect(&args[1], Some(&dict))?;
                 self.ensure_dict_key(&key, span)?;
@@ -205,13 +202,10 @@ impl Checker {
             K::FromEntries => {
                 let key = self.infer.fresh(span, "@DictFromEntries 键");
                 let value = self.infer.fresh(span, "@DictFromEntries 值");
-                let entries = InferTy::List(Box::new(InferTy::Pair(
-                    Box::new(key.clone()),
-                    Box::new(value.clone()),
-                )));
+                let entries = InferTy::list(InferTy::pair(key.clone(), value.clone()));
                 self.check_expr_expect(&args[0], Some(&entries))?;
                 self.ensure_dict_key(&key, span)?;
-                Ok(InferTy::Dict(Box::new(key), Box::new(value)))
+                Ok(InferTy::dict(key, value))
             },
         }
     }
@@ -229,11 +223,11 @@ impl Checker {
         Self::check_arity(args, op.arity(), span)?;
         match op {
             K::Insert => {
-                let elem = match expected {
-                    Some(InferTy::Set(inner)) => (**inner).clone(),
-                    _ => self.infer.fresh(span, "@SetInsert 元素"),
-                };
-                let set = InferTy::Set(Box::new(elem.clone()));
+                let elem = expected
+                    .and_then(InferTy::as_set)
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(span, "@SetInsert 元素"));
+                let set = InferTy::set(elem.clone());
                 self.check_expr_expect(&args[0], Some(&set))?;
                 self.check_expr_expect(&args[1], Some(&elem))?;
                 self.ensure_dict_key(&elem, span)?;
@@ -241,7 +235,7 @@ impl Checker {
             },
             K::Remove => {
                 let elem = self.infer.fresh(span, "@SetRemove 元素");
-                let set = InferTy::Set(Box::new(elem.clone()));
+                let set = InferTy::set(elem.clone());
                 self.check_expr_expect(&args[0], Some(&set))?;
                 self.check_expr_expect(&args[1], Some(&elem))?;
                 self.ensure_dict_key(&elem, span)?;
@@ -249,7 +243,7 @@ impl Checker {
             },
             K::Has => {
                 let elem = self.infer.fresh(span, "@SetHas 元素");
-                let set = InferTy::Set(Box::new(elem.clone()));
+                let set = InferTy::set(elem.clone());
                 self.check_expr_expect(&args[0], Some(&set))?;
                 self.check_expr_expect(&args[1], Some(&elem))?;
                 self.ensure_dict_key(&elem, span)?;
@@ -257,18 +251,18 @@ impl Checker {
             },
             K::Length => {
                 let elem = self.infer.fresh(span, "@SetLength 元素");
-                self.check_expr_expect(&args[0], Some(&InferTy::Set(Box::new(elem))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::set(elem)))?;
                 Ok(InferTy::U64)
             },
             K::Items => {
                 let elem = self.infer.fresh(span, "@SetItems 元素");
-                self.check_expr_expect(&args[0], Some(&InferTy::Set(Box::new(elem.clone()))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::set(elem.clone())))?;
                 self.ensure_dict_key(&elem, span)?;
-                Ok(InferTy::List(Box::new(elem)))
+                Ok(InferTy::list(elem))
             },
             K::Filter => {
                 let elem = self.infer.fresh(span, "@SetFilter 元素");
-                let set = InferTy::Set(Box::new(elem.clone()));
+                let set = InferTy::set(elem.clone());
                 let predicate = InferTy::Fn(vec![elem.clone()], Box::new(InferTy::Bool));
                 self.check_expr_expect(&args[0], Some(&set))?;
                 self.check_expr_expect(&args[1], Some(&predicate))?;
@@ -276,11 +270,11 @@ impl Checker {
                 Ok(set)
             },
             K::Union | K::Intersect | K::Difference => {
-                let elem = match expected {
-                    Some(InferTy::Set(inner)) => (**inner).clone(),
-                    _ => self.infer.fresh(span, "Set 运算元素"),
-                };
-                let set = InferTy::Set(Box::new(elem.clone()));
+                let elem = expected
+                    .and_then(InferTy::as_set)
+                    .cloned()
+                    .unwrap_or_else(|| self.infer.fresh(span, "Set 运算元素"));
+                let set = InferTy::set(elem.clone());
                 self.check_expr_expect(&args[0], Some(&set))?;
                 self.check_expr_expect(&args[1], Some(&set))?;
                 self.ensure_dict_key(&elem, span)?;
@@ -288,9 +282,9 @@ impl Checker {
             },
             K::FromList => {
                 let elem = self.infer.fresh(span, "@SetFromList 元素");
-                self.check_expr_expect(&args[0], Some(&InferTy::List(Box::new(elem.clone()))))?;
+                self.check_expr_expect(&args[0], Some(&InferTy::list(elem.clone())))?;
                 self.ensure_dict_key(&elem, span)?;
-                Ok(InferTy::Set(Box::new(elem)))
+                Ok(InferTy::set(elem))
             },
         }
     }

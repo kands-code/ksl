@@ -18,9 +18,9 @@ pub enum FStrPart {
 /// 记号种类.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
-    /// 标识符; 纯下划线序列在词法层直接识别为抛弃记号.
+    /// 标识符; 纯下划线序列在词法层直接识别为丢弃记号.
     Ident(Symbol),
-    /// 抛弃记号 `_`, 只允许出现在绑定位, 字段忽略位与字段复用位.
+    /// 丢弃记号 `_`, 只允许出现在绑定位, 字段忽略位与字段复用位.
     Discard,
     /// `@` 特殊形式前缀.
     At,

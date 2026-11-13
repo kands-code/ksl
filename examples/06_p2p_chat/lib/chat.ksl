@@ -1,0 +1,98 @@
+# 聊天协议与 Actor: 对端事件, 标准输入读取与协调者.
+#
+# 协调者持有套接字, 两个读 Actor 分别处理标准输入与网络输入.
+# 输入使用 ReadLinePlain, 不用内置行编辑器, 避免异步消息与行重绘互相干扰.
+
+@Data[ChatEvent, {
+  LocalLine[string],
+  LocalEof[],
+  PeerLine[string],
+  PeerEof[],
+  PeerError[SocketError]
+}];
+
+@Let[usage, "usage: main.ksl listen <port> | connect <port>"];
+
+@Let[stdin_reader, @Handler[
+  [self : Pid[nil, nil], coordinator : Pid[ChatEvent, nil]] : nil,
+  @Match[ReadLinePlain[""], {
+    (/Ok[line], @Match[line, {
+      (/Some[text], @Block[
+        @Let[_sent, @Send[coordinator, 0u, ChatEvent/LocalLine[text]]],
+        @Continue[coordinator]
+      ]),
+      (/None[], @Block[
+        @Let[_sent, @Send[coordinator, 0u, ChatEvent/LocalEof[]]],
+        nil
+      ])
+    }]),
+    (/Err[_error], @Block[
+      @Let[_sent, @Send[coordinator, 0u, ChatEvent/LocalEof[]]],
+      nil
+    ])
+  }]
+]];
+
+@Let[socket_reader, @Handler[
+  [self : Pid[nil, nil], coordinator : Pid[ChatEvent, nil], socket : Socket] : nil,
+  @Match[SocketReadLine[socket, 4096U, 60000U], {
+    (/Ok[line], @Match[line, {
+      (/Some[text], @Block[
+        @Let[_sent, @Send[coordinator, 0u, ChatEvent/PeerLine[text]]],
+        @Continue[coordinator, socket]
+      ]),
+      (/None[], @Block[
+        @Let[_sent, @Send[coordinator, 0u, ChatEvent/PeerEof[]]],
+        nil
+      ])
+    }]),
+    (/Err[error], @Match[error, {
+      (/TimedOut[], @Continue[coordinator, socket]),
+      (_, @Block[
+        @Let[_sent, @Send[coordinator, 0u, ChatEvent/PeerError[error]]],
+        nil
+      ])
+    }])
+  }]
+]];
+
+@Let[coordinator, @Handler[
+  [self : Pid[ChatEvent, nil], socket : Socket, started : bool] : nil,
+  @If[started,
+    @Match[@Receive[0u, Option/None[]], {
+      (/Some[event], @Match[event, {
+        (/LocalLine[text], @Match[SocketWriteLine[socket, text, 30000U], {
+          (/Ok[_], @Continue[socket, true]),
+          (/Err[_error], @Block[
+            Print["发送失败, 连接已关闭"],
+            nil
+          ])
+        }]),
+        (/LocalEof[], @Block[
+          @Let[_closed, SocketClose[socket]],
+          nil
+        ]),
+        (/PeerLine[text], @Block[
+          Print[text],
+          @Continue[socket, true]
+        ]),
+        (/PeerEof[], @Block[
+          Print["对端已离开"],
+          nil
+        ]),
+        (/PeerError[_error], @Block[
+          Print["对端连接错误"],
+          nil
+        ])
+      }]),
+      (/None[], nil)
+    }],
+    @Block[
+      @Let[_stdin, @Spawn[stdin_reader, self]],
+      @Let[_reader, @Spawn[socket_reader, self, socket]],
+      @Continue[socket, true]
+    ]
+  ]
+]];
+
+@Export[usage, coordinator, ^ChatEvent];

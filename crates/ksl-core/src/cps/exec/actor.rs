@@ -26,8 +26,7 @@ impl Machine {
                 ));
             }
             if let Some(scheduler) = &self.scheduler {
-                let source = self.actor.as_ref().map(|runtime| runtime.pid.id);
-                scheduler.wake_send(source, target.id, index);
+                scheduler.wake_send(target.id, index);
             }
         }
         self.control = Control::Return(Value::Bool(delivered));
@@ -46,7 +45,7 @@ impl Machine {
             return Err(Error::internal("Spawn 需要调度器"));
         };
         let parent = self.actor.as_ref().map(|actor| Arc::clone(&actor.pid));
-        let pid = scheduler.spawn(parent.as_ref(), self.epoch, count, detached, handler, args);
+        let pid = scheduler.spawn(parent.as_ref(), count, detached, handler, args);
         self.control = Control::Return(pid);
         Ok(())
     }

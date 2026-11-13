@@ -39,7 +39,7 @@ impl Machine {
                 ))
             },
             RegistryOp::WhereIs => {
-                let Type::OptionT(inner) = ty else {
+                let Some(inner) = ty.as_option() else {
                     return Err(Error::internal("WhereIs 的结果类型不是 Option[Pid]"));
                 };
                 match scheduler.where_is_name(text, inner) {

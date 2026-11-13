@@ -1,29 +1,41 @@
 # 并发等待超时的开销.
 #
-# 主脚本一次启动大量 Actor, 每个都在 @Receive 上等待同一个超时;
-# 覆盖调度器定时堆的插入, 大量同截止时刻的到期取出与唤醒.
+# 启动器创建 2000 个等待者, 每个在 @Receive 上等待同一个超时;
+# 收集器逐个 Join. 覆盖调度器定时堆的插入, 到期取出与批量唤醒.
 
 @Let[waiter, @Handler[[self : Pid[i64, i64]] : i64,
   @Match[@Receive[0u, Option/Some[10U]], {
     (/Some[x], x),
     (/None[], 1)
-  }]
-]];
+  }]]];
 
-@Def[spawn_all, [n : i64] : List[Pid[i64, i64]],
-  @If[LessOrEqualI64[n, 0], {},
+@Let[spawner, @Handler[
+  [self : Pid[nil, List[Pid[i64, i64]]], remaining : i64,
+   waiters : List[Pid[i64, i64]]] : List[Pid[i64, i64]],
+  @If[LessOrEqualI64[remaining, 0], waiters,
     @Block[
-      @Let[p, @Spawn[1u, waiter]],
-      @Let[rest, spawn_all[SubI64[n, 1]]],
-      @ListPrepend[rest, p]
+      @Let[p, @SpawnDetached[waiter]],
+      @Continue[SubI64[remaining, 1], @ListPrepend[waiters, p]]
     ]
-  ]
-];
+  ]]];
 
-@Let[waiters, spawn_all[2000]];
-@Let[count, @ListFold[waiters,
-  @Fn[[p : Pid[i64, i64], acc : i64] : i64,
-    AddI64[acc, @Match[@Join[p], { (/Ok[v], v), (/Err[e], 0) }]]],
-  0]];
-@Let[printed, Print[f"{count}"]];
-nil
+@Let[collector, @Handler[
+  [self : Pid[nil, i64], waiters : List[Pid[i64, i64]],
+   index : u64, total : i64] : i64,
+  @If[LessU64[index, @ListLength[waiters]],
+    @Block[
+      @Let[p, @ListGet[waiters, index]],
+      @Let[value, @ResultGet[@Join[p], 0]],
+      @Continue[waiters, AddU64[index, 1U], AddI64[total, value]]
+    ],
+    total
+  ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[spawner_pid, @Spawn[spawner, 2000, {}]],
+    @Let[waiters : List[Pid[i64, i64]], @ResultGet[@Join[spawner_pid], {}]],
+    @Let[collector_pid, @Spawn[collector, waiters, 0U, 0]],
+    @Let[result, @ResultGet[@Join[collector_pid], -1]],
+    Print[f"{result}"]
+  ]];

@@ -14,9 +14,9 @@ fn tail_and_non_tail_calls_are_distinct() {
     let ir = lower(
         r"
         @Def[count, [n : i64] : i64,
-            @If[LessOrEqualI64[n, 0], 0, count[SubI64[n, 1]]]];
+          @If[LessOrEqualI64[n, 0], 0, count[SubI64[n, 1]]]];
         @Def[sum, [n : i64] : i64,
-            @If[LessOrEqualI64[n, 0], 0, AddI64[1, sum[SubI64[n, 1]]]]];
+          @If[LessOrEqualI64[n, 0], 0, AddI64[1, sum[SubI64[n, 1]]]]];
         count[10]
     ",
     );
@@ -28,15 +28,18 @@ fn tail_and_non_tail_calls_are_distinct() {
 fn actor_primitives_are_explicit() {
     let ir = lower(
         r"
-        @Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64,
-            @Match[@Receive[0u, Option/None[]], {
+        @Main[[self : Pid[nil, nil]] : nil,
+          @Block[
+            @Let[worker, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+              @Match[@Receive[0u, Option/None[]], {
                 (/Some[message], @Continue[message]),
                 (/None[], n)
-            }]]];
-        @Spawn[1u, worker, 0]
+              }]]],
+            @Let[_p, @Spawn[worker, 0]]
+          ]]
     ",
     );
-    assert!(ir.contains("handler $handler0(self : Pid[i64, i64], n : i64, $k) : i64:"));
+    assert!(ir.contains("handler $handler1(self : Pid[i64, i64], n : i64, $k) : i64:"));
     assert!(ir.contains("receive 0,"));
     assert!(ir.contains("continue(%"));
     assert!(ir.contains("prim @Spawn("));

@@ -1,7 +1,7 @@
 # 延迟投递的开销.
 #
-# 主脚本向同一个服务 Actor 注册大量 @SetTimer, 覆盖共享定时堆的插入,
-# 到期取出与消息投递. 服务 Actor 收齐全部延迟消息后返回.
+# 服务 Actor 等待 20000 条延迟消息, 投递 Actor 逐条注册同截止时刻的
+# 定时消息. 覆盖共享定时堆的插入, 到期取出与消息投递.
 
 @Let[server, @Handler[[self : Pid[i64, i64], remaining : i64] : i64,
   @If[EqualI64[remaining, 0], 0,
@@ -9,20 +9,22 @@
       (/Some[_], @Continue[SubI64[remaining, 1]]),
       (/None[], -1)
     }]
-  ]
-]];
+  ]]];
 
-@Def[arm, [n : i64, target : Pid[i64, i64]] : nil,
-  @If[LessOrEqualI64[n, 0], nil,
+@Let[armer, @Handler[
+  [self : Pid[nil, nil], remaining : i64, target : Pid[i64, i64]] : nil,
+  @If[LessOrEqualI64[remaining, 0], nil,
     @Block[
       @Let[_timer, @SetTimer[target, 0u, 1, 1U]],
-      arm[SubI64[n, 1], target]
+      @Continue[SubI64[remaining, 1], target]
     ]
-  ]
-];
+  ]]];
 
-@Let[service, @Spawn[1u, server, 20000]];
-@Let[_armed, arm[20000, service]];
-@Let[result, @Match[@Join[service], { (/Ok[v], v), (/Err[e], -1) }]];
-@Let[printed, Print[f"{result}"]];
-nil
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[service, @Spawn[server, 20000]],
+    @Let[arming, @Spawn[armer, 20000, service]],
+    @Let[_armed, @Join[arming]],
+    @Let[result, @ResultGet[@Join[service], -1]],
+    Print[f"{result}"]
+  ]];

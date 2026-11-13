@@ -4,13 +4,12 @@
 //! 编号与规范标题, 编号分段为 `E01xx` 词法, `E02xx` 语法, `E03xx` 类型
 //! 检查, `E04xx` 运行时.
 //!
-//! 编号按阶段分段; 正式发布前允许按类别调整, 正式发布后编号成为公开契约,
-//! 退役的编号不再复用. 编号由 `ksl_macros::ErrorNumber` 按阶段基数与声明
-//! 顺序生成, 调整顺序即自动重排.
+//! 编号按阶段分段; 退役的编号不再复用. 编号由 `ksl_macros::ErrorNumber`
+//! 按阶段基数与声明顺序生成, 调整顺序即自动重排.
 //! 内部错误即实现缺陷, 不入目录, 单独渲染.
 //!
 //! 种类可携带数据, 如期望与实得的类型, 实参个数; 细节由种类生成, 措辞
-//! 集中在一处, 便于统一调整.
+//! 集中在一处.
 
 use std::fmt;
 
@@ -115,8 +114,6 @@ pub enum ErrorKind {
     LiteralRequired,
     /// 信箱索引超出 Pid 的信箱数.
     MailboxIndexOutOfRange { index: usize, count: usize },
-    /// @Spawn 的信箱数与 Handler 的 Pid 不一致.
-    SpawnCountMismatch { expected: usize, found: usize },
     /// @Spawn 的 handler 不是 Handler 类型.
     NotHandler { found: Type },
     /// @Send/@Join/@Kill 的实参不是 Pid.
@@ -153,6 +150,18 @@ pub enum ErrorKind {
     ExportPrivateType { name: String },
     /// REPL 会话中再次直接加载已加载的模块.
     ModuleAlreadyLoaded { path: String },
+    /// `@Main` 的参数不是唯一的 Pid self.
+    InvalidMainParam,
+    /// `@Main` 的返回类型或 Pid 返回类型不是 nil.
+    InvalidMainReturn,
+    /// `@Main` 出现在模块之外.
+    MainOutsideModule,
+    /// 同一模块出现多个 `@Main`.
+    MultipleMainStatements { module: String },
+    /// `@Halt` 出现在 `@Main` 体内.
+    HaltInMain,
+    /// `@Continue` 出现在 `@Main` 体内.
+    ContinueInMain,
     // 运行时
     /// 用户主动中断: 断言失败.
     #[phase(401)]
@@ -198,6 +207,10 @@ pub enum ErrorKind {
     // 时间与日期
     /// 日期时间超出可表示范围.
     DateTimeOutOfRange,
+    /// 尝试 Join 根 Actor.
+    JoinRoot,
+    /// 尝试终止根 Actor.
+    KillRoot,
 }
 
 impl ErrorKind {
@@ -234,7 +247,7 @@ impl ErrorKind {
             Self::DataNotTopLevel => "数据声明不在顶层",
             Self::DefinitionNotAllowed => "定义只能位于顶层或 @Block 语句位置",
             Self::ExpectedDef => "此处需要 @Def 定义",
-            Self::ExitNotTopLevel => "@Exit 只能出现在顶层",
+            Self::ExitNotTopLevel => "@Exit 只能出现在顶层或 @Main 体内",
             Self::ModuleFormNotTopLevel => "模块声明只能出现在顶层",
             // 类型检查
             Self::TypeMismatch { .. } => "类型不符",
@@ -261,10 +274,11 @@ impl ErrorKind {
             Self::InvalidPidType { .. } => "Pid 的信箱数不合法",
             Self::InvalidHandlerType => "Handler 的第一个类型参数必须是 Pid",
             Self::InvalidHandlerParam => "@Handler 的首参数必须是 Pid",
-            Self::ActorPrimitiveOutsideHandler => "该 Actor 原语只能在 @Handler 体内使用",
+            Self::ActorPrimitiveOutsideHandler => {
+                "该 Actor 原语只能在 @Handler 或 @Main 体内使用"
+            },
             Self::LiteralRequired => "此处需要非负整数字面量",
             Self::MailboxIndexOutOfRange { .. } => "信箱索引越界",
-            Self::SpawnCountMismatch { .. } => "@Spawn 的信箱数不匹配",
             Self::NotHandler { .. } => "该值不是 Handler",
             Self::NotPid { .. } => "该值不是 Pid",
             Self::ModuleFormNotResolved => "模块声明尚未经过加载与链接",
@@ -281,6 +295,12 @@ impl ErrorKind {
             Self::ExportOutsideModule => "导出声明只允许出现在模块中",
             Self::ExportPrivateType { .. } => "导出签名使用了未导出的类型",
             Self::ModuleAlreadyLoaded { .. } => "模块已加载",
+            Self::InvalidMainParam => "@Main 必须只有一个 Pid self 参数",
+            Self::InvalidMainReturn => "@Main 的返回类型必须是 nil",
+            Self::MainOutsideModule => "@Main 只允许出现在模块中",
+            Self::MultipleMainStatements { .. } => "同一模块只能有一个 @Main",
+            Self::HaltInMain => "@Halt 不能出现在 @Main 体内",
+            Self::ContinueInMain => "@Continue 不能出现在 @Main 体内",
             Self::UnprintableType { .. } => "该类型不可打印",
             Self::InvalidDictKey { .. } => "Dict 的键类型不受支持",
             // 运行时
@@ -305,6 +325,8 @@ impl ErrorKind {
             Self::Deadlock => "所有任务都在等待",
             Self::TimeoutOutOfRange => "等待时间超出平台范围",
             Self::DateTimeOutOfRange => "日期时间超出可表示范围",
+            Self::JoinRoot => "不能 Join 根 Actor",
+            Self::KillRoot => "不能终止根 Actor",
         }
     }
 
@@ -340,7 +362,7 @@ impl ErrorKind {
             },
             Self::InvalidFormatSpec { spec } => spec.clone(),
             Self::UnusedValue { found } => {
-                format!("类型 {found}, 请绑定或显式抛弃")
+                format!("类型 {found}, 请绑定或显式丢弃")
             },
             Self::UnreachableMatchArm => "通配分支之后不可再有分支".to_string(),
             Self::InvalidPidType { mailboxes } => {
@@ -348,9 +370,6 @@ impl ErrorKind {
             },
             Self::MailboxIndexOutOfRange { index, count } => {
                 format!("索引 {index}, 信箱数 {count}")
-            },
-            Self::SpawnCountMismatch { expected, found } => {
-                format!("期望 {expected}, 实际 {found}")
             },
             Self::ModuleReadFailed { path, message } => {
                 format!("{path}: {message}")

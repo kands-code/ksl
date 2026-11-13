@@ -1,0 +1,7 @@
+# @value (6, (7, (5, 7)))
+# 后缀调用: 立即应用匿名函数, 链式应用, 分支返回函数的应用与实参内嵌应用.
+@Let[imm, @Fn[[x : i64] : i64, AddI64[x, 1]][5]];
+@Let[chain, @Fn[[x : i64] : Fn[[i64] : i64], @Fn[[y : i64] : i64, AddI64[x, y]]][3][4]];
+@Let[branch, @If[true, @Fn[[x : i64] : i64, x], @Fn[[x : i64] : i64, AddI64[x, 1]]][5]];
+@Let[nested, AddI64[1, @Fn[[x : i64] : i64, MulI64[x, 2]][3]]];
+(imm, (chain, (branch, nested)))

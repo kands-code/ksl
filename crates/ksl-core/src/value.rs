@@ -1,10 +1,10 @@
 //! 运行时值表示.
 //!
-//! 按 `docs/design.md` 第 10 节的决议: 大于指针的变体一律 `Arc` 包裹,
-//! 列表用 imbl 的持久化向量并同样以 `Arc` 包裹; 用户数据无内部可变性,
-//! Actor 与 File 句柄由运行时内部同步. `Value` 是 `Send + Sync`, 为 Actor
-//! 消息跨线程传递预留. 值拷贝统一为 O(1); 变体载荷以 8 字节瘦指针为主,
-//! string 的 `Arc<str>` 是胖指针占 16 字节, 加判别位即 24 字节.
+//! 大于指针的变体一律 `Arc` 包裹, 列表用 imbl 的持久化向量并同样以 `Arc`
+//! 包裹; 用户数据无内部可变性, Actor 与 File 句柄由运行时内部同步. `Value`
+//! 是 `Send + Sync`, 支持 Actor 消息跨线程传递. 值拷贝为 O(1); 变体载荷以
+//! 8 字节瘦指针为主, string 的 `Arc<str>` 是胖指针占 16 字节, 加判别位即
+//! 24 字节.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,6 +51,10 @@ pub enum Value {
     Pid(Arc<ActorHandle>),
     /// 已打开的文件句柄.
     File(Arc<FileHandle>),
+    /// 已连接的字节流句柄.
+    Socket(Arc<crate::io::SocketHandle>),
+    /// TCP 监听器句柄.
+    TcpListener(Arc<crate::io::TcpListenerHandle>),
     /// 时间值: 绝对时刻加时区.
     DateTime(Arc<jiff::Zoned>),
 }
@@ -846,8 +850,8 @@ mod tests {
 
     /// 值表示的体积是运行时表示的不变量, 在 ksl 源码层面看不见, 故由本测试守住.
     ///
-    /// 24 字节的由来见 `docs/design.md` 第 10 节: 载荷以 8 字节瘦指针为主,
-    /// string 的 `Arc<str>` 是胖指针占 16 字节, 加判别位即 24.
+    /// 24 字节上限的构成: 载荷以 8 字节瘦指针为主, string 的 `Arc<str>` 是
+    /// 胖指针占 16 字节, 加判别位即 24.
     #[test]
     fn value_fits_target_size() {
         assert!(

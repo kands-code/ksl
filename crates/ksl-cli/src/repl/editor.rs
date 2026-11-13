@@ -1,33 +1,30 @@
 //! 交互输入编辑器.
 //!
-//! 采用单行编辑加固定行续行: 当前行就地编辑, 括号或字符串未闭合时把当前行
-//! 固定到终端, 以 `n| ` 继续输入; 完整后整段提交. 已固定的行不再移动光标,
-//! 因此不需要多行缓冲与 viewport.
+//! 采用多行缓冲: 段内任意行可编辑, `n$ ` 提示正在编辑的焦点行, 其余行
+//! 按位置显示 `n> ` 与 `n| `; 超出终端高度时按视口窗口显示, 焦点行始终
+//! 可见. Enter 在输入完整时整段提交, 否则在光标处拆行续输; Backspace
+//! 在行首合并上一行, Ctrl-D 在行尾合并下一行, 末尾空行上的 Ctrl-D 删除
+//! 该空行.
 //!
-//! 键位是 Emacs 子集: 行内移动, 杀/粘贴, 历史, Ctrl-C/D, Ctrl-L. 不处理
-//! Alt 组合, 也不做补全. 括号匹配与语法着色由 `highlight` 模块按词法器计算.
+//! 键位是 Emacs 子集: 行内移动与杀/粘贴由 `BufferEditor` 处理,
+//! Ctrl-P/N 在行间转移编辑焦点, 方向键上下选择历史 (仅单行输入时),
+//! 括号匹配与语法着色由 `highlight` 模块按词法器计算.
 
 use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
 
-use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
-};
-use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ksl_core::symbol::Symbol;
 use ksl_core::terminal::{
-    Ink, LineAction, LineEditor, LineLayout, RenderState, clear, draw, finish, layout,
+    BufferEditor, Ink, LineAction, LineLayout, RenderState, Session, clear, compose, draw,
+    finish, layout,
 };
 
 use self::history::History;
-use self::render::print_fixed;
 use super::complete;
 use super::highlight::{Span, line_spans};
 
 mod history;
-mod render;
 
 /// 一次读入的结果.
 pub(super) enum ReadOutcome {
@@ -51,9 +48,10 @@ enum KeyResult {
 
 pub(super) struct Editor {
     history: History,
-    line: LineEditor,
+    buffer: BufferEditor,
     builtins: HashSet<Symbol>,
     width: usize,
+    height: usize,
     plain: bool,
 }
 
@@ -63,14 +61,16 @@ impl Editor {
             || !std::io::stdout().is_terminal()
             || std::env::var("TERM").is_ok_and(|term| term == "dumb")
             || !supports_ansi();
-        let width = crossterm::terminal::size().map_or(80, |(width, _)| {
-            if width == 0 { 80 } else { usize::from(width) }
-        });
+        let (width, height) = crossterm::terminal::size()
+            .map_or((80, 24), |(width, height)| {
+                (defaulted(width, 80), defaulted(height, 24))
+            });
         Self {
             history: History::new(),
-            line: LineEditor::new(),
+            buffer: BufferEditor::new(),
             builtins,
             width,
+            height,
             plain,
         }
     }
@@ -91,63 +91,69 @@ impl Editor {
     fn read_plain(&mut self) -> ReadOutcome {
         let mut block: Vec<String> = Vec::new();
         loop {
-            let mut raw = String::new();
-            match io::stdin().read_line(&mut raw) {
-                Ok(0) => return ReadOutcome::Eof,
-                Ok(_) => {
-                    let line = strip_line_ending(raw);
-                    let full = join_block(&block, &line);
-                    if complete(&full) {
-                        if !full.trim().is_empty() {
-                            self.history.add(full.clone());
-                        }
-                        return ReadOutcome::Line(full);
-                    }
-                    block.push(line);
-                },
+            // 逐行输入统一经由输入线程; 取消缓冲由它先行消费.
+            let line = match ksl_core::io::read_repl_line() {
+                Ok(Some(line)) => line,
+                Ok(None) => return ReadOutcome::Eof,
                 Err(err) => {
-                    errln!("读取输入失败: {err}");
+                    errln!("读取输入失败: {err:?}");
                     return ReadOutcome::Failed;
                 },
+            };
+            let full = join_block(&block, &line);
+            if complete(&full) {
+                if !full.trim().is_empty() {
+                    self.history.add(full.clone());
+                }
+                return ReadOutcome::Line(full);
             }
+            block.push(line);
         }
     }
 
     fn read_interactive(&mut self, round: usize) -> ReadOutcome {
+        // 会话开启后输入线程被会话占用, 缓冲请求必须在此之前取走.
+        let initial =
+            ksl_core::io::take_buffered_text().or_else(ksl_core::io::take_buffered_line);
         let mut out = io::stdout();
-        let _guard = match RawGuard::new() {
-            Ok(guard) => guard,
+        let session = match Session::open(true) {
+            Ok(session) => session,
             Err(err) => {
-                errln!("无法进入交互编辑, 退回逐行读取: {err}");
+                errln!("无法进入交互编辑, 退回逐行读取: {err:?}");
                 self.plain = true;
                 return self.read_plain();
             },
         };
-        let mut block: Vec<String> = Vec::new();
-        self.line.clear();
+        let (width, height) = session.size();
+        self.width = width;
+        self.height = height;
+        self.buffer.clear();
+        // 取消的程序读取留下的文本作为编辑初值, 不丢输入.
+        if let Some(text) = initial {
+            self.buffer.set_text(&text);
+        }
         let mut state = RenderState::new();
-        if let Err(err) = self.redraw(&mut out, &mut state, round, &block) {
+        if let Err(err) = self.redraw(&mut out, &mut state, round) {
             errln!("绘制输入失败: {err}");
             return ReadOutcome::Failed;
         }
         loop {
-            let event = match event::read() {
+            let event = match session.recv() {
                 Ok(event) => event,
                 Err(err) => {
-                    errln!("读取输入失败: {err}");
+                    errln!("读取输入失败: {err:?}");
                     return ReadOutcome::Failed;
                 },
             };
             match event {
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
-                    let result =
-                        match self.handle_key(key, round, &mut block, &mut state, &mut out) {
-                            Ok(result) => result,
-                            Err(err) => {
-                                errln!("绘制输入失败: {err}");
-                                return ReadOutcome::Failed;
-                            },
-                        };
+                    let result = match self.handle_key(key, round, &mut state, &mut out) {
+                        Ok(result) => result,
+                        Err(err) => {
+                            errln!("绘制输入失败: {err}");
+                            return ReadOutcome::Failed;
+                        },
+                    };
                     match result {
                         KeyResult::Continue => {},
                         KeyResult::Accept(text) => return ReadOutcome::Line(text),
@@ -156,16 +162,15 @@ impl Editor {
                     }
                 },
                 Event::Paste(text) => {
-                    if let Err(err) =
-                        self.handle_paste(&text, round, &mut block, &mut state, &mut out)
-                    {
+                    if let Err(err) = self.handle_paste(&text, round, &mut state, &mut out) {
                         errln!("绘制输入失败: {err}");
                         return ReadOutcome::Failed;
                     }
                 },
-                Event::Resize(cols, _) => {
-                    self.width = if cols == 0 { 80 } else { usize::from(cols) };
-                    if let Err(err) = self.redraw(&mut out, &mut state, round, &block) {
+                Event::Resize(cols, rows) => {
+                    self.width = defaulted(cols, 80);
+                    self.height = defaulted(rows, 24);
+                    if let Err(err) = self.redraw(&mut out, &mut state, round) {
                         errln!("绘制输入失败: {err}");
                         return ReadOutcome::Failed;
                     }
@@ -179,68 +184,57 @@ impl Editor {
         &mut self,
         key: KeyEvent,
         round: usize,
-        block: &mut Vec<String>,
         state: &mut RenderState,
         out: &mut impl Write,
     ) -> io::Result<KeyResult> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Up => {
-                self.history_previous(round, block, state, out)?;
+            // 历史选择只用方向键, 且仅单行输入时可用.
+            KeyCode::Up if self.buffer.buffer().line_count() == 1 => {
+                self.history_previous(round, state, out)?;
                 return Ok(KeyResult::Continue);
             },
-            KeyCode::Down => {
-                self.history_next(round, block, state, out)?;
+            KeyCode::Down if self.buffer.buffer().line_count() == 1 => {
+                self.history_next(round, state, out)?;
                 return Ok(KeyResult::Continue);
             },
+            // Ctrl-P/N 在行间转移编辑焦点, Emacs 语义的行上移与行下移.
             KeyCode::Char('p') if ctrl => {
-                self.history_previous(round, block, state, out)?;
+                self.buffer.buffer_mut().move_focus_up();
+                self.redraw(out, state, round)?;
                 return Ok(KeyResult::Continue);
             },
             KeyCode::Char('n') if ctrl => {
-                self.history_next(round, block, state, out)?;
-                return Ok(KeyResult::Continue);
-            },
-            KeyCode::Char('d') if ctrl && self.line.is_empty() && !block.is_empty() => {
-                clear(out, state)?;
-                block.clear();
-                self.history.reset();
-                self.redraw(out, state, round, block)?;
+                self.buffer.buffer_mut().move_focus_down();
+                self.redraw(out, state, round)?;
                 return Ok(KeyResult::Continue);
             },
             _ => {},
         }
-        match self.line.handle_key(key) {
+        match self.buffer.handle_key(key) {
             LineAction::Continue => {
-                self.redraw(out, state, round, block)?;
+                self.redraw(out, state, round)?;
                 Ok(KeyResult::Continue)
             },
-            LineAction::Accept => self.accept_or_continue(round, block, state, out),
+            LineAction::Accept => self.accept_or_continue(round, state, out),
             LineAction::Interrupt => {
                 clear(out, state)?;
                 write!(out, "^C\r\n")?;
                 out.flush()?;
-                self.line.clear();
+                self.buffer.clear();
                 self.history.reset();
                 Ok(KeyResult::Interrupt)
             },
             LineAction::Eof => {
-                if block.is_empty() {
-                    let current = self.layout_for(round, block);
-                    finish(out, state, &current)?;
-                    self.line.clear();
-                    Ok(KeyResult::Eof)
-                } else {
-                    clear(out, state)?;
-                    block.clear();
-                    self.history.reset();
-                    self.redraw(out, state, round, block)?;
-                    Ok(KeyResult::Continue)
-                }
+                let current = self.layout_for(round, false);
+                draw(out, state, &current)?;
+                finish(out, state, &current)?;
+                self.buffer.clear();
+                Ok(KeyResult::Eof)
             },
             LineAction::Clear => {
                 clear(out, state)?;
-                self.redraw(out, state, round, block)?;
+                self.redraw(out, state, round)?;
                 Ok(KeyResult::Continue)
             },
         }
@@ -249,169 +243,115 @@ impl Editor {
     fn accept_or_continue(
         &mut self,
         round: usize,
-        block: &mut Vec<String>,
         state: &mut RenderState,
         out: &mut impl Write,
     ) -> io::Result<KeyResult> {
-        let full = join_block(block, self.line.text());
+        let full = self.buffer.buffer().text();
         if complete(&full) {
-            let current = self.layout_for(round, block);
+            // 接受前先按终态重绘: 焦点行已完成编辑, `$` 标记与括号
+            // 强调固定回位置提示符, 留下的回显不再带编辑状态.
+            let current = self.layout_for(round, false);
+            draw(out, state, &current)?;
             finish(out, state, &current)?;
             if !full.trim().is_empty() {
                 self.history.add(full.clone());
             }
             self.history.reset();
-            self.line.clear();
+            self.buffer.clear();
             return Ok(KeyResult::Accept(full));
         }
-        // 固定行不再显示括号标记, 避免第一行留下的未配对红色在后续行补齐后仍然存在.
-        self.commit_line(round, block, state, out)?;
-        block.push(self.line.text().to_owned());
-        self.line.clear();
+        // 输入未完: 在光标处拆行续输.
+        self.buffer.buffer_mut().newline();
         self.history.reset();
-        self.redraw(out, state, round, block)?;
+        self.redraw(out, state, round)?;
         Ok(KeyResult::Continue)
-    }
-
-    /// 把当前行作为固定行打印; 不检查完整性.
-    fn commit_line(
-        &self,
-        round: usize,
-        block: &[String],
-        state: &mut RenderState,
-        out: &mut impl Write,
-    ) -> io::Result<()> {
-        let line = self.line.line();
-        let prompt = if block.is_empty() {
-            format!("{round}> ")
-        } else {
-            format!("{round}| ")
-        };
-        let prefix = if block.is_empty() {
-            0
-        } else {
-            block.join("\n").len() + 1
-        };
-        let line_start = prefix;
-        let line_end = prefix + line.text().len();
-        let full = join_block(block, line.text());
-        let spans = line_spans(&full, line_start, line_end, None, &self.builtins);
-        clear(out, state)?;
-        print_fixed(out, &prompt, line.text(), &spans)
     }
 
     fn history_previous(
         &mut self,
         round: usize,
-        block: &mut Vec<String>,
         state: &mut RenderState,
         out: &mut impl Write,
     ) -> io::Result<()> {
-        if !block.is_empty() {
-            return Ok(());
-        }
-        let current = self.line.text().to_owned();
+        let current = self.buffer.buffer().text();
         let Some(entry) = self.history.previous(&current) else {
             return Ok(());
         };
-        self.recall(&entry, round, block, state, out)
+        self.recall(&entry, round, state, out)
     }
 
     fn history_next(
         &mut self,
         round: usize,
-        block: &mut Vec<String>,
         state: &mut RenderState,
         out: &mut impl Write,
     ) -> io::Result<()> {
-        if !block.is_empty() {
-            return Ok(());
-        }
         let Some(entry) = self.history.next() else {
             return Ok(());
         };
-        self.recall(&entry, round, block, state, out)
+        self.recall(&entry, round, state, out)
     }
 
-    /// 把历史条目放回输入区: 除最后一行外都作为固定行打印.
+    /// 把历史条目放回编辑区, 焦点落在最后一行.
     fn recall(
         &mut self,
         entry: &str,
         round: usize,
-        block: &mut Vec<String>,
         state: &mut RenderState,
         out: &mut impl Write,
     ) -> io::Result<()> {
-        clear(out, state)?;
-        let mut parts: Vec<&str> = entry.split('\n').collect();
-        let last = parts.pop().unwrap_or("");
-        if parts.is_empty() {
-            self.line.set_text(last.to_owned());
-            self.redraw(out, state, round, block)?;
-            return Ok(());
-        }
-        let mut offset = 0;
-        for (index, part) in parts.iter().enumerate() {
-            let prompt = if index == 0 {
-                format!("{round}> ")
-            } else {
-                format!("{round}| ")
-            };
-            let start = offset;
-            let end = start + part.len();
-            let spans = line_spans(entry, start, end, None, &self.builtins);
-            print_fixed(out, &prompt, part, &spans)?;
-            offset = end + 1;
-        }
-        *block = parts.iter().map(|part| (*part).to_owned()).collect();
-        self.line.set_text(last.to_owned());
-        state.reset();
-        self.redraw(out, state, round, block)
+        self.buffer.set_text(entry);
+        self.redraw(out, state, round)
     }
 
-    /// 粘贴按行提交: 除最后一段外都固定到终端, 最后一段留在当前行.
+    /// 粘贴按行并入缓冲, 末段成为新的焦点行.
     fn handle_paste(
         &mut self,
         text: &str,
         round: usize,
-        block: &mut Vec<String>,
         state: &mut RenderState,
         out: &mut impl Write,
     ) -> io::Result<()> {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        let mut parts = text.split('\n').peekable();
-        while let Some(part) = parts.next() {
-            self.line.line_mut().insert_str(part);
-            if parts.peek().is_some() {
-                self.commit_line(round, block, state, out)?;
-                block.push(self.line.text().to_owned());
-                self.line.clear();
-                self.history.reset();
-            }
-        }
-        self.redraw(out, state, round, block)
+        self.buffer.buffer_mut().insert_block(&text);
+        self.history.reset();
+        self.redraw(out, state, round)
     }
 
-    fn layout_for(&self, round: usize, block: &[String]) -> LineLayout {
-        let line = self.line.line();
-        let prompt = if block.is_empty() {
-            format!("{round}> ")
-        } else {
-            format!("{round}| ")
-        };
-        let prefix = if block.is_empty() {
-            0
-        } else {
-            block.join("\n").len() + 1
-        };
-        let line_start = prefix;
-        let line_end = prefix + line.text().len();
-        let full = join_block(block, line.text());
-        let cursor = line_start + line.cursor();
-        let spans = line_spans(&full, line_start, line_end, Some(cursor), &self.builtins);
-        layout(&prompt, line.text(), line.cursor(), self.width, |offset| {
-            ink_at(&spans, offset)
-        })
+    /// 组合整段输入的视觉布局: 每行按各自提示符布局, 焦点行带括号标记,
+    /// 超出终端高度时保留末尾窗口且焦点行可见.
+    ///
+    /// `editing` 为假时表示接受或结束后的终态: 焦点行已完成编辑,
+    /// 统一显示位置提示符, 且不带括号强调.
+    fn layout_for(&self, round: usize, editing: bool) -> LineLayout {
+        let buffer = self.buffer.buffer();
+        let full = buffer.text();
+        let focus = buffer.focus();
+        let mut parts = Vec::with_capacity(buffer.line_count());
+        let mut offset = 0;
+        for (index, line) in buffer.lines().iter().enumerate() {
+            let prompt = if editing && index == focus {
+                format!("{round}$ ")
+            } else if index == 0 {
+                format!("{round}> ")
+            } else {
+                format!("{round}| ")
+            };
+            let line_start = offset;
+            let line_end = line_start + line.text().len();
+            // 括号标记只跟随编辑中焦点行的光标; 其余行按普通配色.
+            let cursor = if editing && index == focus {
+                Some(line_start + line.cursor())
+            } else {
+                None
+            };
+            let spans = line_spans(&full, line_start, line_end, cursor, &self.builtins);
+            parts.push(layout(&prompt, line.text(), line.cursor(), self.width, |at| {
+                ink_at(&spans, at)
+            }));
+            offset = line_end + 1;
+        }
+        compose(parts, focus, self.height)
     }
 
     fn redraw(
@@ -419,10 +359,18 @@ impl Editor {
         out: &mut impl Write,
         state: &mut RenderState,
         round: usize,
-        block: &[String],
     ) -> io::Result<()> {
-        let current = self.layout_for(round, block);
+        let current = self.layout_for(round, true);
         draw(out, state, &current)
+    }
+}
+
+/// 终端报告 0 列或 0 行时退回默认值; 无尺寸报告的伪终端按 80x24 处理.
+fn defaulted(value: u16, default: usize) -> usize {
+    if value == 0 {
+        default
+    } else {
+        usize::from(value)
     }
 }
 
@@ -450,47 +398,5 @@ fn join_block(block: &[String], line: &str) -> String {
         line.to_owned()
     } else {
         format!("{}\n{}", block.join("\n"), line)
-    }
-}
-
-fn strip_line_ending(mut line: String) -> String {
-    if line.ends_with('\n') {
-        line.pop();
-    }
-    if line.ends_with('\r') {
-        line.pop();
-    }
-    line
-}
-
-/// 离开交互读取时恢复终端状态.
-struct RawGuard {
-    raw: bool,
-    paste: bool,
-}
-
-impl RawGuard {
-    fn new() -> io::Result<Self> {
-        enable_raw_mode()?;
-        let mut guard = Self {
-            raw: true,
-            paste: false,
-        };
-        execute!(io::stdout(), EnableBracketedPaste)?;
-        guard.paste = true;
-        Ok(guard)
-    }
-}
-
-impl Drop for RawGuard {
-    fn drop(&mut self) {
-        let mut out = io::stdout();
-        if self.paste {
-            let _ = execute!(out, DisableBracketedPaste);
-        }
-        if self.raw {
-            let _ = disable_raw_mode();
-        }
-        let _ = out.flush();
     }
 }

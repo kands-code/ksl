@@ -40,6 +40,7 @@ const KEYWORDS: &[&str] = &[
     "Def",
     "Exit",
     "Handler",
+    "Main",
     "Continue",
     "Spawn",
     "SpawnDetached",

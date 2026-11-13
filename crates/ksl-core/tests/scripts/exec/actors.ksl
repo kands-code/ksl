@@ -1,137 +1,142 @@
 # @run
 # Actor 基础: 信箱消息, Pid 编号稳定性, 闭包捕获, 多信箱与消息携带 Pid.
-@Let[basic, @Block[
-  @Let[counter, @Handler[[self : Pid[i64, i64], n : i64] : i64,
-    @Block[
-      @Let[msg, @Receive[0u, Option/Some[10U]]],
-      @Match[msg, {
-        (/Some[m], @Continue[AddI64[n, m]]),
-        (/None[], n)
-      }]
-    ]]],
-  @Let[p, @Spawn[1u, counter, 0]],
-  @Let[s, @Send[p, 0u, 5]],
-  @Match[@Join[p], { (/Ok[v], v), (/Err[e], 0) }]
-]];
-@Assert[EqualI64[basic, 5], "信箱消息更新状态"];
-
-@Let[identity, @Block[
-  @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
-    @Match[@Receive[0u, Option/None[]], {
-      (/Some[n], n),
-      (/None[], 0)
-    }]]],
-  @Let[a, @Spawn[1u, worker]],
-  @Let[b, @Spawn[1u, worker]],
-  @Let[a_id, @PidSerial[a]],
-  @Let[b_id, @PidSerial[b]],
-  @Let[same, EqualU64[a_id, @PidSerial[a]]],
-  @Let[different, EqualU64[a_id, b_id]],
-  @Let[first, @Send[a, 0u, 5]],
-  @Let[joined, @Join[a]],
-  @Let[second, @Send[a, 0u, 6]],
-  @Let[killed, @Kill[b]],
-  {@If[same, 1, 0], @If[different, 1, 0], @If[first, 1, 0], @If[second, 1, 0]}
-]];
-@Assert[EqualU64[@ListLength[identity], 4U], "Pid 编号与信箱状态项数"];
-@Assert[EqualI64[@ListGet[identity, 0U], 1], "同一 Pid 编号稳定"];
-@Assert[EqualI64[@ListGet[identity, 1U], 0], "不同 Pid 编号不同"];
-@Assert[EqualI64[@ListGet[identity, 2U], 1], "首个消息被接受"];
-@Assert[EqualI64[@ListGet[identity, 3U], 0], "已终止目标拒绝消息"];
-
-@Let[capture, @Block[
-  @Let[bias, 10],
-  @Let[h, @Handler[[self : Pid[i64, i64], n : i64] : i64,
-    AddI64[bias, n]]],
-  @Let[bias, 20],
-  @Let[p, @Spawn[1u, h, 5]],
-  @Match[@Join[p], { (/Ok[v], v), (/Err[e], 0) }]
-]];
-@Assert[EqualI64[capture, 15], "Handler 按定义处捕获"];
-
-@Let[mailboxes, @Block[
-  @Let[w1, @Handler[[self : Pid[i64, i64]] : i64,
-    @Match[@Receive[0u, Option/None[]], {
-      (/Some[x], x),
-      (/None[], 0)
-    }]]],
-  @Let[a, @Block[
-    @Let[p, @Spawn[1u, w1]],
-    @Let[s, @Send[p, 0u, 5]],
-    @Match[@Join[p], { (/Ok[v], v), (/Err[e], 0) }]
-  ]],
-  @Let[w2, @Handler[[self : Pid[i64, string, string]] : string,
-    @Match[@Receive[1u, Option/None[]], {
-      (/Some[s], s),
-      (/None[], "none")
-    }]]],
-  @Let[b, @Block[
-    @Let[p, @Spawn[2u, w2]],
-    @Let[s, @Send[p, 1u, "hi"]],
-    @Match[@Join[p], { (/Ok[v], v), (/Err[e], "err") }]
-  ]],
-  (a, b)
-]];
-@Assert[EqualI64[@Fst[mailboxes], 5], "单信箱消息"];
-@Assert[EqualString[@Snd[mailboxes], "hi"], "多信箱按索引投递"];
-
-@Let[join_waiters, @Block[
-  @Let[target, @Handler[[self : Pid[i64, i64]] : i64,
-    @Block[@Sleep[10U], 7]]],
-  @Let[waiter, @Handler[[self : Pid[i64, i64], t : Pid[i64, i64]] : i64,
-    @Match[@Join[t], { (/Ok[v], v), (/Err[e], -1) }]]],
-  @Let[t, @Spawn[1u, target]],
-  @Let[a, @Spawn[1u, waiter, t]],
-  @Let[b, @Spawn[1u, waiter, t]],
-  @Let[va, @Match[@Join[a], { (/Ok[v], v), (/Err[e], -2) }]],
-  @Match[@Join[b], {
-    (/Ok[vb], AddI64[va, vb]),
-    (/Err[e], -3)
-  }]
-]];
-@Assert[EqualI64[join_waiters, 14], "多个 Join 等待者共享结局"];
 
 @Data[Request, {Query[Pid[Response, string]]}];
 @Data[Response, {Answer[string]}];
 
-@Let[client, @Handler[[self : Pid[Response, string]] : string,
-  @Match[@Receive[0u, Option/None[]], {
-    (/Some[resp], @Match[resp, { (/Answer[s], s) }]),
-    (/None[], "none")
-  }]]];
-
-@Let[server, @Handler[[self : Pid[Request, string]] : string,
+@Main[[self : Pid[nil, nil]] : nil,
   @Block[
-    @Let[msg, @Receive[0u, Option/None[]]],
-    @Match[msg, {
-      (/Some[req], @Match[req, { (/Query[c], @Block[
-        @Let[sent, @Send[c, 0u, Response/Answer["ok"]]],
-        "done"
-      ]) }]),
-      (/None[], "none")
-    }]
-  ]]];
+    @Let[basic, @Block[
+      @Let[counter, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+        @Block[
+          @Let[msg, @Receive[0u, Option/Some[10U]]],
+          @Match[msg, {
+            (/Some[m], @Continue[AddI64[n, m]]),
+            (/None[], n)
+          }]
+        ]]],
+      @Let[p, @Spawn[counter, 0]],
+      @Let[s, @Send[p, 0u, 5]],
+      @Match[@Join[p], { (/Ok[v], v), (/Err[e], 0) }]
+    ]],
+    @Assert[EqualI64[basic, 5], "信箱消息更新状态"],
 
-@Let[pid_message, @Block[
-  @Let[c, @Spawn[1u, client]],
-  @Let[s, @Spawn[1u, server]],
-  @Let[m, @Send[s, 0u, Request/Query[c]]],
-  @Match[@Join[c], { (/Ok[v], v), (/Err[e], "err") }]
-]];
-@Assert[EqualString[pid_message, "ok"], "消息携带 Pid 并回复"];
+    @Let[identity, @Block[
+      @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
+        @Match[@Receive[0u, Option/None[]], {
+          (/Some[n], n),
+          (/None[], 0)
+        }]]],
+      @Let[a, @Spawn[worker]],
+      @Let[b, @Spawn[worker]],
+      @Let[a_id, @PidSerial[a]],
+      @Let[b_id, @PidSerial[b]],
+      @Let[same, EqualU64[a_id, @PidSerial[a]]],
+      @Let[different, EqualU64[a_id, b_id]],
+      @Let[first, @Send[a, 0u, 5]],
+      @Let[joined, @Join[a]],
+      @Let[second, @Send[a, 0u, 6]],
+      @Let[killed, @Kill[b]],
+      {@If[same, 1, 0], @If[different, 1, 0], @If[first, 1, 0], @If[second, 1, 0]}
+    ]],
+    @Assert[EqualU64[@ListLength[identity], 4U], "Pid 编号与信箱状态项数"],
+    @Assert[EqualI64[@ListGet[identity, 0U], 1], "同一 Pid 编号稳定"],
+    @Assert[EqualI64[@ListGet[identity, 1U], 0], "不同 Pid 编号不同"],
+    @Assert[EqualI64[@ListGet[identity, 2U], 1], "首个消息被接受"],
+    @Assert[EqualI64[@ListGet[identity, 3U], 0], "已终止目标拒绝消息"],
 
-# 主动中止只终止该 Actor, 退出原因带错误编号与说明.
-@Let[panic_worker, @Handler[[self : Pid[i64, nil]] : nil,
-  @Block[
-    @Panic["actor 内中止"]
-  ]]];
-@Let[panic_pid, @Spawn[1u, panic_worker]];
-@Let[panic_reason, @Match[@Join[panic_pid], {
-  (/Ok[v], (0, "成功")),
-  (/Err[e], @Match[e, {
-    (/Failed[code, message], (code, message)),
-    (_, (0, "其他结局"))
-  }])
-}]];
-@Assert[EqualI64[@Fst[panic_reason], 402], "Actor 内主动中止带错误编号"];
-@Assert[EqualString[@Snd[panic_reason], "主动中止: actor 内中止"], "Actor 内主动中止带说明"];
+    @Let[capture, @Block[
+      @Let[bias, 10],
+      @Let[h, @Handler[[self : Pid[i64, i64], n : i64] : i64,
+        AddI64[bias, n]]],
+      @Let[bias, 20],
+      @Let[p, @Spawn[h, 5]],
+      @Match[@Join[p], { (/Ok[v], v), (/Err[e], 0) }]
+    ]],
+    @Assert[EqualI64[capture, 15], "Handler 按定义处捕获"],
+
+    @Let[mailboxes, @Block[
+      @Let[w1, @Handler[[self : Pid[i64, i64]] : i64,
+        @Match[@Receive[0u, Option/None[]], {
+          (/Some[x], x),
+          (/None[], 0)
+        }]]],
+      @Let[a, @Block[
+        @Let[p, @Spawn[w1]],
+        @Let[s, @Send[p, 0u, 5]],
+        @Match[@Join[p], { (/Ok[v], v), (/Err[e], 0) }]
+      ]],
+      @Let[w2, @Handler[[self : Pid[i64, string, string]] : string,
+        @Match[@Receive[1u, Option/None[]], {
+          (/Some[s], s),
+          (/None[], "none")
+        }]]],
+      @Let[b, @Block[
+        @Let[p, @Spawn[w2]],
+        @Let[s, @Send[p, 1u, "hi"]],
+        @Match[@Join[p], { (/Ok[v], v), (/Err[e], "err") }]
+      ]],
+      (a, b)
+    ]],
+    @Assert[EqualI64[@Fst[mailboxes], 5], "单信箱消息"],
+    @Assert[EqualString[@Snd[mailboxes], "hi"], "多信箱按索引投递"],
+
+    @Let[join_waiters, @Block[
+      @Let[target, @Handler[[self : Pid[i64, i64]] : i64,
+        @Block[@Sleep[10U], 7]]],
+      @Let[waiter, @Handler[[self : Pid[i64, i64], t : Pid[i64, i64]] : i64,
+        @Match[@Join[t], { (/Ok[v], v), (/Err[e], -1) }]]],
+      @Let[t, @Spawn[target]],
+      @Let[a, @Spawn[waiter, t]],
+      @Let[b, @Spawn[waiter, t]],
+      @Let[va, @Match[@Join[a], { (/Ok[v], v), (/Err[e], -2) }]],
+      @Match[@Join[b], {
+        (/Ok[vb], AddI64[va, vb]),
+        (/Err[e], -3)
+      }]
+    ]],
+    @Assert[EqualI64[join_waiters, 14], "多个 Join 等待者共享结局"],
+
+
+    @Let[client, @Handler[[self : Pid[Response, string]] : string,
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[resp], @Match[resp, { (/Answer[s], s) }]),
+        (/None[], "none")
+      }]]],
+
+    @Let[server, @Handler[[self : Pid[Request, string]] : string,
+      @Block[
+        @Let[msg, @Receive[0u, Option/None[]]],
+        @Match[msg, {
+          (/Some[req], @Match[req, { (/Query[c], @Block[
+            @Let[sent, @Send[c, 0u, Response/Answer["ok"]]],
+            "done"
+          ]) }]),
+          (/None[], "none")
+        }]
+      ]]],
+
+    @Let[pid_message, @Block[
+      @Let[c, @Spawn[client]],
+      @Let[s, @Spawn[server]],
+      @Let[m, @Send[s, 0u, Request/Query[c]]],
+      @Match[@Join[c], { (/Ok[v], v), (/Err[e], "err") }]
+    ]],
+    @Assert[EqualString[pid_message, "ok"], "消息携带 Pid 并回复"],
+
+    # 主动中止只终止该 Actor, 退出原因带错误编号与说明.
+    @Let[panic_worker, @Handler[[self : Pid[i64, nil]] : nil,
+      @Block[
+        @Panic["actor 内中止"]
+      ]]],
+    @Let[panic_pid, @Spawn[panic_worker]],
+    @Let[panic_reason, @Match[@Join[panic_pid], {
+      (/Ok[v], (0, "成功")),
+      (/Err[e], @Match[e, {
+        (/Failed[code, message], (code, message)),
+        (_, (0, "其他结局"))
+      }])
+    }]],
+    @Assert[EqualI64[@Fst[panic_reason], 402], "Actor 内主动中止带错误编号"],
+    @Assert[EqualString[@Snd[panic_reason], "主动中止: actor 内中止"], "Actor 内主动中止带说明"]
+  ]]

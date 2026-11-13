@@ -152,7 +152,7 @@ pub(crate) fn link_and_check_cached(
 }
 
 impl Linker {
-    // 模块链接步骤集中在一处, 便于对照 `docs/design.md` 第 15 节.
+    // 模块链接步骤对应 `docs/design.md` 第 14 节.
     #[allow(clippy::too_many_lines)]
     fn link_module(&mut self, unit: &super::ModuleUnit) -> Result<LinkedModule, KslError> {
         let type_names = local_type_names(&unit.program)?;
@@ -351,6 +351,7 @@ impl Linker {
             })
             .collect();
         let mut program = unit.program.clone();
+        normalize_main(&mut program, &unit.id)?;
         rewrite_program(&mut program, &type_map);
 
         check::collect_data(&program, &mut self.data)?;
@@ -420,12 +421,12 @@ impl Linker {
                     },
                     UseItem::Type(name) => {
                         if let Some(target) = type_refs.get(&name.node) {
-                            types.insert(name.key(), crate::check::Type::Data(target.full));
+                            types.insert(name.key(), crate::check::Type::data(target.full));
                         }
                     },
                     UseItem::TypeRename { to, .. } => {
                         if let Some(target) = type_refs.get(&to.node) {
-                            types.insert(to.key(), crate::check::Type::Data(target.full));
+                            types.insert(to.key(), crate::check::Type::data(target.full));
                         }
                     },
                 }
@@ -440,7 +441,7 @@ impl Linker {
                 },
                 ExportItem::Type(name) => {
                     if let Some(target) = exports.types.get(&name.node) {
-                        types.insert(name.key(), crate::check::Type::Data(target.full));
+                        types.insert(name.key(), crate::check::Type::data(target.full));
                     }
                 },
             }
@@ -469,7 +470,7 @@ fn visible_types(exports: &Exports) -> HashSet<Symbol> {
     visible
 }
 
-/// 导出签名中的 Data 类型必须已导出或为内置类型.
+/// 导出签名中的 Data 类型必须已导出或为内置类型; 不透明类型均为内置.
 fn check_export_type(
     ty: &crate::check::Type,
     visible: &HashSet<Symbol>,
@@ -477,7 +478,7 @@ fn check_export_type(
 ) -> Result<(), KslError> {
     use crate::check::Type;
     match ty {
-        Type::Data(name) => {
+        Type::App { name, args } if args.is_empty() => {
             if visible.contains(name) {
                 Ok(())
             } else {
@@ -490,26 +491,8 @@ fn check_export_type(
                 ))
             }
         },
-        Type::List(inner) | Type::Set(inner) | Type::OptionT(inner) => {
-            check_export_type(inner, visible, span)
-        },
-        Type::Dict(key, value) => {
-            check_export_type(key, visible, span)?;
-            check_export_type(value, visible, span)
-        },
-        Type::ResultT(ok, err) | Type::Pair(ok, err) => {
-            check_export_type(ok, visible, span)?;
-            check_export_type(err, visible, span)
-        },
-        Type::PidT(pid) => {
-            for mailbox in &pid.mailboxes {
-                check_export_type(mailbox, visible, span)?;
-            }
-            check_export_type(&pid.ret, visible, span)
-        },
-        Type::HandlerT(handler) => {
-            check_export_type(&handler.pid, visible, span)?;
-            for arg in &handler.args {
+        Type::App { args, .. } => {
+            for arg in args.iter() {
                 check_export_type(arg, visible, span)?;
             }
             Ok(())
@@ -529,8 +512,7 @@ fn check_export_type(
         | Type::Str
         | Type::Nil
         | Type::Never
-        | Type::File
-        | Type::DateTime => Ok(()),
+        | Type::Opaque(_) => Ok(()),
     }
 }
 
@@ -632,6 +614,58 @@ fn local_value_names(program: &crate::ast::Program) -> HashMap<Symbol, Span> {
 /// 改写模块程序: 数据类型声明名换为完全限定名, 类型引用按改写表替换.
 ///
 /// 导入与导出声明不是可执行语句, 改写前先行剔除.
+/// 把 `@Main` 从顶层语句中取出并放到程序末尾.
+///
+/// `@Main` 的逻辑位置在全部顶层语句之后, 物理位置不影响语义; 依赖模块
+/// 的 `@Main` 同样保留在末尾参与检查, 但执行结果只由根模块使用.
+fn normalize_main(
+    program: &mut crate::ast::Program,
+    module: &crate::module::ModuleId,
+) -> Result<(), KslError> {
+    use crate::ast::{ExprKind, Special};
+
+    let mut main = None;
+    let mut stmts = Vec::with_capacity(program.stmts.len());
+    for stmt in std::mem::take(&mut program.stmts) {
+        if matches!(&stmt.node, ExprKind::Special(Special::Main { .. })) {
+            if main.replace(stmt).is_some() {
+                return Err(KslError::with_subject(
+                    ErrorKind::MultipleMainStatements {
+                        module: module.to_string(),
+                    },
+                    main.as_ref().expect("刚写入").span,
+                    module.to_string(),
+                ));
+            }
+        } else {
+            stmts.push(stmt);
+        }
+    }
+    program.stmts = stmts;
+    if let Some(tail) = program.tail.take() {
+        if matches!(&tail.node, ExprKind::Special(Special::Main { .. })) {
+            if main.replace(tail).is_some() {
+                return Err(KslError::with_subject(
+                    ErrorKind::MultipleMainStatements {
+                        module: module.to_string(),
+                    },
+                    main.as_ref().expect("刚写入").span,
+                    module.to_string(),
+                ));
+            }
+        } else {
+            program.tail = Some(tail);
+        }
+    }
+    if let Some(main) = main {
+        if let Some(tail) = program.tail.take() {
+            program.stmts.push(tail);
+        }
+        program.tail = Some(main);
+    }
+    Ok(())
+}
+
 fn rewrite_program(program: &mut crate::ast::Program, types: &TypeNames) {
     program.stmts.retain_mut(|stmt| {
         if matches!(

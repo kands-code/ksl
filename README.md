@@ -26,7 +26,7 @@ cargo test --workspace
 
 ## 文档
 
-- 设计结论: `docs/design.md`
+- 设计: `docs/design.md`
 - 术语表: `docs/GLOSSARY.md`
 - 示例: `examples/README.md`
 - 基准: `bench/README.md`

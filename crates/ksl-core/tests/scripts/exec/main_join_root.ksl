@@ -1,0 +1,25 @@
+# @run
+# 子 Actor 不能 Join 根 Pid; 根 Actor 的结局只由程序宿主处理.
+@Let[child, @Handler[[self : Pid[nil, nil], root : Pid[nil, nil]] : nil,
+  @Block[
+    @Match[@Join[root], {
+      (/Ok[_], @Panic["Join 根 Pid 不应成功"]),
+      (/Err[e], @Match[e, {
+        (/Failed[code, message], nil),
+        (_, @Panic["Join 根 Pid 应报运行时错误"])
+      }])
+    }]
+  ]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[c, @Spawn[child, self]],
+    @Match[@Join[c], {
+      (/Ok[_], @Panic["子 Actor 应失败"]),
+      (/Err[e], @Match[e, {
+        (/Failed[code, message],
+          @Assert[EqualString[message, "不能 Join 根 Actor"], "错误信息"]),
+        (_, @Panic["子 Actor 应报运行时错误"])
+      }])
+    }]
+  ]]

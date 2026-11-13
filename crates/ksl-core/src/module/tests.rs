@@ -1,4 +1,6 @@
 //! 模块加载器测试.
+//!
+//! 覆盖模块图, 链接, 缓存与类型表; 单文件语言层功能由脚本用例覆盖.
 
 use std::fs;
 use std::path::PathBuf;
@@ -108,10 +110,10 @@ fn links_exports_and_namespaces() {
         .value_types
         .get(&crate::symbol::intern("x"))
         .expect("x 类型应可确定");
-    assert!(matches!(
-        x_ty,
-        crate::check::Type::Data(name) if &*crate::symbol::resolve(*name) == "lib/a/A"
-    ));
+    assert!(
+        x_ty.as_data()
+            .is_some_and(|name| &*crate::symbol::resolve(name) == "lib/a/A")
+    );
 
     // 未导出的类型不能被导入.
     let root = temp_root("missing_export");
@@ -171,10 +173,10 @@ fn links_exports_and_namespaces() {
         .value_types
         .get(&crate::symbol::intern("x"))
         .expect("x 类型应可确定");
-    assert!(matches!(
-        x_ty,
-        crate::check::Type::Data(name) if &*crate::symbol::resolve(*name) == "lib/a/D"
-    ));
+    assert!(
+        x_ty.as_data()
+            .is_some_and(|name| &*crate::symbol::resolve(name) == "lib/a/D")
+    );
 
     // 尾 @Use 与尾 @Export 同样按声明处理.
     let root = temp_root("tail_decls");
@@ -232,6 +234,40 @@ fn rejects_export_and_import_conflicts() {
     let error = crate::module::load_and_check(&path, main, &mut sources)
         .expect_err("两个导入值同名应报错");
     assert!(matches!(error.kind, ErrorKind::DuplicateImport { .. }));
+}
+
+#[test]
+fn main_is_module_form_and_only_root_body_runs() {
+    // 依赖模块的 @Main 只检查不执行; 其体含 @Exit, 若执行会以 7 结束.
+    let root = temp_root("main_form");
+    write(
+        &root,
+        "lib/a.ksl",
+        "@Let[dep, 1];\n@Export[dep];\n@Main[[self : Pid[nil, nil]] : nil, @Exit[7u]];\n",
+    );
+    let main =
+        "@Use[{dep}, \"lib/a\"];\n@Let[_d, dep];\n@Main[[self : Pid[nil, nil]] : nil, nil];\n";
+    let path = write(&root, "main.ksl", main);
+    let mut sources = Sources::default();
+    let graph =
+        crate::module::load_and_check(&path, main, &mut sources).expect("模块应通过检查");
+    let mut scheduler = crate::cps::scheduler::Scheduler::new();
+    let execution = execute(&mut scheduler, &graph).expect("模块应执行");
+    let handler = execution.main_handler.expect("根模块应有 @Main");
+    let result =
+        scheduler.run_main(handler, execution.main_mailboxes.expect("@Main 应有信箱数"));
+    assert!(matches!(result, Ok(Value::Nil)), "依赖的 @Main 不应执行");
+    scheduler.shutdown();
+
+    // 同一模块只允许一个 @Main.
+    let root = temp_root("multiple_main");
+    let main = "@Main[[self : Pid[nil, nil]] : nil, nil];\n@Main[[self : Pid[nil, nil]] : \
+                nil, nil];\n";
+    let path = write(&root, "main.ksl", main);
+    let mut sources = Sources::default();
+    let error = crate::module::load_and_check(&path, main, &mut sources)
+        .expect_err("同一模块只允许一个 @Main");
+    assert!(matches!(error.kind, ErrorKind::MultipleMainStatements { .. }));
 }
 
 #[test]
@@ -492,10 +528,7 @@ fn module_type_tables_are_recorded() {
         .get(&ModuleId("lib/a".to_string()))
         .expect("依赖模块应存在");
     assert!(
-        dependency
-            .types
-            .values()
-            .any(|ty| matches!(ty, crate::check::Type::Data(_))),
+        dependency.types.values().any(|ty| ty.as_data().is_some()),
         "依赖模块应记录 Data 类型"
     );
     let main_module = graph.get(&graph.root).expect("主模块应存在");

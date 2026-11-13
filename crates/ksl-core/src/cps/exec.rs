@@ -76,7 +76,6 @@ pub(crate) enum Wait {
     },
     Io {
         op_id: u64,
-        kind: crate::io::IoKind,
     },
 }
 
@@ -210,7 +209,6 @@ pub struct Machine {
     actor: Option<ActorRuntime>,
     scheduler: Option<SchedulerHandle>,
     gc: Arc<GcRegistry>,
-    epoch: u64,
 }
 
 impl Default for Machine {
@@ -230,13 +228,7 @@ impl Machine {
             actor: None,
             scheduler: None,
             gc: Arc::new(GcRegistry::new()),
-            epoch: 0,
         }
-    }
-
-    /// 标记本机器属于哪一轮输入; 该轮失败时调度器据此清理其启动的 Actor.
-    pub(crate) fn set_epoch(&mut self, epoch: u64) {
-        self.epoch = epoch;
     }
 
     pub(crate) fn set_scheduler(&mut self, scheduler: SchedulerHandle) {
@@ -261,13 +253,11 @@ impl Machine {
         args: Vec<Value>,
         cli_args: Vec<String>,
         scheduler: SchedulerHandle,
-        epoch: u64,
     ) -> Result<Self, Error> {
         let Value::Closure(_) = &handler else {
             return Err(Error::internal("Actor 的 handler 不是 IR 闭包"));
         };
         let mut machine = Self::new();
-        machine.epoch = epoch;
         machine.args = cli_args;
         machine.set_scheduler(scheduler);
         machine.actor = Some(ActorRuntime {
@@ -295,34 +285,6 @@ impl Machine {
     #[must_use]
     pub(crate) fn globals(&self) -> &Env {
         &self.globals
-    }
-
-    /// 执行一个顶层程序; 失败时回滚全局环境.
-    ///
-    /// # Errors
-    ///
-    /// 运行时错误或 `@Exit` 在此返回.
-    pub fn run_program(
-        &mut self,
-        program: &crate::ast::Program,
-        types: &crate::check::TypeTable,
-    ) -> Result<Value, Error> {
-        let checkpoint = self.globals.clone();
-        self.start_program(program, types);
-        let result = self.run_to_end();
-        match result {
-            Ok(value) => {
-                self.control = Control::Halt;
-                self.kont.clear();
-                Ok(value)
-            },
-            Err(error) => {
-                self.globals = checkpoint;
-                self.control = Control::Halt;
-                self.kont.clear();
-                Err(error)
-            },
-        }
     }
 
     /// 把顶层程序降级为线性 IR 并装入控制状态.
@@ -365,25 +327,6 @@ impl Machine {
             }
         }
         Ok(RunOutcome::Yield)
-    }
-
-    fn run_to_end(&mut self) -> Result<Value, Error> {
-        let gc = Arc::clone(&self.gc);
-        let mut budget = usize::MAX;
-        loop {
-            match self.step(&gc, &mut budget)? {
-                StepResult::Finished(value) => return Ok(value),
-                StepResult::Suspended(_) | StepResult::ActorExit(_) => {
-                    return Err(Error::internal("主脚本中出现了 Actor 原语"));
-                },
-                // 直接执行不设调度预算; 该分支只在预算被耗尽时理论上出现.
-                StepResult::Continue | StepResult::Yield => {
-                    if budget == 0 {
-                        budget = usize::MAX;
-                    }
-                },
-            }
-        }
     }
 
     fn step(&mut self, gc: &GcRegistry, budget: &mut usize) -> Result<StepResult, Error> {
@@ -449,22 +392,27 @@ impl Machine {
     ) -> Result<(), Error> {
         match callee {
             Value::Builtin(id) => {
-                if let Some(builder) = builtin::io_builder(id) {
-                    let task = builder(&args, span)?;
-                    if let Some(scheduler) = self.scheduler.clone() {
-                        let (id, kind) = scheduler.submit_io(task);
-                        self.control = Control::Suspend(Wait::Io { op_id: id, kind });
-                    } else {
-                        let value = crate::io::run_task(task)?;
+                let Some(kind) = builtin::resolve(id) else {
+                    return Err(Error::internal(format!(
+                        "内置函数未注册: {}",
+                        builtin::name(id)
+                    )));
+                };
+                match kind {
+                    builtin::Builtin::Io(builder) => {
+                        let task = builder(&args, span)?;
+                        let Some(scheduler) = self.scheduler.clone() else {
+                            return Err(Error::internal("I/O 内置需要调度器"));
+                        };
+                        let owner = self.actor.as_ref().map(|actor| actor.pid.id);
+                        let op_id = scheduler.submit_io(task, owner);
+                        self.control = Control::Suspend(Wait::Io { op_id });
+                    },
+                    builtin::Builtin::Pure(function) => {
+                        let value = function(&self.args, &args, span)?;
                         self.control = Control::Return(value);
-                    }
-                    return Ok(());
+                    },
                 }
-                let function = builtin::lookup(id).ok_or_else(|| {
-                    Error::internal(format!("内置函数未注册: {}", builtin::name(id)))
-                })?;
-                let value = function(&self.args, &args, span)?;
-                self.control = Control::Return(value);
             },
             Value::Closure(closure) => {
                 if args.len() != closure.params.len() {
@@ -506,11 +454,13 @@ impl Machine {
             PrimOp::SetLiteral => self.start_set_literal(args, span),
             PrimOp::Registry(op) => self.start_registry_op(op, &args, arg_types, ty, span),
             PrimOp::Option(op) => self.start_option_op(op, args, span),
-            PrimOp::Spawn { detached } => {
+            PrimOp::Spawn {
+                detached,
+                mailboxes,
+            } => {
                 let mut args = PrimArgs::new(args, span);
-                let count = args.u8_count()?;
                 let handler = args.next()?;
-                self.spawn_actor(handler, count, args.remaining(), detached, span)
+                self.spawn_actor(handler, mailboxes, args.remaining(), detached, span)
             },
             PrimOp::Send => self.start_send(args, span),
             PrimOp::Join => {

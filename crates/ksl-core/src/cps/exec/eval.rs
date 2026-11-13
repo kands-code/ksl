@@ -68,6 +68,8 @@ pub(super) fn describe(value: &Value) -> &'static str {
         Value::Builtin(_) => "内置函数",
         Value::Pid(_) => "Pid",
         Value::File(_) => "File",
+        Value::Socket(_) => "Socket",
+        Value::TcpListener(_) => "TcpListener",
         Value::DateTime(_) => "DateTime",
     }
 }

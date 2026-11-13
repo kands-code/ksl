@@ -317,7 +317,6 @@ pub(crate) fn shift_left_i64(
 /// 逻辑右移: 位数达到或超过字宽时结果为 0, 高位补 0 且满足结合律.
 ///
 /// 实现上把位模式重解释为无符号数再移回; i64 直接右移是算术移位, 高位补符号.
-#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 pub(crate) fn shift_right_i64(
     _: &[String],
     a: &[Value],
@@ -325,11 +324,10 @@ pub(crate) fn shift_right_i64(
 ) -> Result<Value, Error> {
     let x = int1(a)?;
     let amount = shift_amount(a.get(1))?;
-    let value = if amount >= 64 {
-        0
-    } else {
-        ((x as u64) >> amount) as i64
-    };
+    let value = x
+        .cast_unsigned()
+        .checked_shr(amount)
+        .map_or(0, u64::cast_signed);
     Ok(Value::I64(value))
 }
 pub(crate) fn bit_or_i64(_: &[String], a: &[Value], _: Option<Span>) -> Result<Value, Error> {
@@ -538,14 +536,14 @@ pub(crate) fn u64_to_f64(_: &[String], a: &[Value], _: Option<Span>) -> Result<V
     };
     Ok(Value::F64(*x as f64))
 }
-pub(crate) fn char_to_i64(_: &[String], a: &[Value], _: Option<Span>) -> Result<Value, Error> {
+pub(crate) fn char_to_u64(_: &[String], a: &[Value], _: Option<Span>) -> Result<Value, Error> {
     let Some(Value::Char(c)) = a.first() else {
         return Err(Error::internal("转换的实参形态不符"));
     };
-    Ok(Value::I64(i64::from(u32::from(*c))))
+    Ok(Value::U64(u64::from(u32::from(*c))))
 }
-pub(crate) fn i64_to_char(_: &[String], a: &[Value], s: Option<Span>) -> Result<Value, Error> {
-    let Some(Value::I64(x)) = a.first() else {
+pub(crate) fn u64_to_char(_: &[String], a: &[Value], s: Option<Span>) -> Result<Value, Error> {
+    let Some(Value::U64(x)) = a.first() else {
         return Err(Error::internal("转换的实参形态不符"));
     };
     let scalar = u32::try_from(*x).ok().and_then(char::from_u32);

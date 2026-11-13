@@ -1,8 +1,7 @@
 //! 源文件数据库与源码区间.
 //!
 //! [`Span`] 携带文件标识与字节区间, 行号与列号由 [`Sources`] 按需换算.
-//! 位置信息的服务对象是 annotate-snippets 的终端诊断渲染与 LSP,
-//! 区间设计以两者的共同需求为准.
+//! 位置信息同时服务 annotate-snippets 的终端诊断渲染与 LSP.
 
 /// 源文件标识.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

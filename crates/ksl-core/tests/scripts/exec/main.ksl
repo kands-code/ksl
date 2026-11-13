@@ -1,0 +1,16 @@
+# @run
+# Main 作为根 Actor 执行; 体内可用 Actor 原语并以 @Assert 断言.
+@Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
+  @Match[@Receive[0u, Option/None[]], {
+    (/Some[x], x),
+    (/None[], 0)
+  }]]];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[p, @Spawn[worker]],
+    @Let[_s, @Send[p, 0u, 42]],
+    @Let[r, @Join[p]],
+    @Let[value, @Match[r, { (/Ok[v], v), (/Err[e], 0) }]],
+    @Assert[EqualI64[value, 42], "Main 应能收发并 Join 子 Actor"]
+  ]]

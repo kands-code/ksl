@@ -56,6 +56,54 @@ pub(crate) fn string_length(
     Ok(Value::U64(length))
 }
 
+/// 字符谓词的公共形态检查; 名字只用于内部错误.
+fn char_predicate(
+    name: &str,
+    a: &[Value],
+    predicate: fn(char) -> bool,
+) -> Result<Value, Error> {
+    let Some(Value::Char(c)) = a.first() else {
+        return Err(Error::internal(format!("{name} 的实参形态不符")));
+    };
+    Ok(Value::Bool(predicate(*c)))
+}
+
+pub(crate) fn is_whitespace(
+    _: &[String],
+    a: &[Value],
+    _: Option<Span>,
+) -> Result<Value, Error> {
+    char_predicate("IsWhitespace", a, char::is_whitespace)
+}
+
+pub(crate) fn is_ascii_digit(
+    _: &[String],
+    a: &[Value],
+    _: Option<Span>,
+) -> Result<Value, Error> {
+    char_predicate("IsAsciiDigit", a, |c| c.is_ascii_digit())
+}
+
+pub(crate) fn is_letter(_: &[String], a: &[Value], _: Option<Span>) -> Result<Value, Error> {
+    char_predicate("IsLetter", a, char::is_alphabetic)
+}
+
+pub(crate) fn is_uppercase(_: &[String], a: &[Value], _: Option<Span>) -> Result<Value, Error> {
+    char_predicate("IsUppercase", a, char::is_uppercase)
+}
+
+pub(crate) fn is_lowercase(_: &[String], a: &[Value], _: Option<Span>) -> Result<Value, Error> {
+    char_predicate("IsLowercase", a, char::is_lowercase)
+}
+
+pub(crate) fn is_alphanumeric(
+    _: &[String],
+    a: &[Value],
+    _: Option<Span>,
+) -> Result<Value, Error> {
+    char_predicate("IsAlphanumeric", a, char::is_alphanumeric)
+}
+
 pub(crate) fn string_split(_: &[String], a: &[Value], _: Option<Span>) -> Result<Value, Error> {
     let Some(Value::Str(text)) = a.first() else {
         return Err(Error::internal("StringSplit 的实参形态不符"));
@@ -81,7 +129,7 @@ pub(crate) fn string_lines(_: &[String], a: &[Value], _: Option<Span>) -> Result
     let mut lines: Vec<Value> = text
         .split('\n')
         .map(|line| {
-            let line = line.strip_suffix('\r').unwrap_or(line);
+            let line = line.trim_suffix('\r');
             Value::Str(Arc::from(line))
         })
         .collect();

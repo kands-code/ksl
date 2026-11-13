@@ -18,7 +18,7 @@ use tree_sitter::{Node, Parser};
 enum Category {
     /// 标识符, 含特殊形式名与字面关键字.
     Ident,
-    /// 抛弃记号 `_`.
+    /// 丢弃记号 `_`.
     Discard,
     I64,
     U8,

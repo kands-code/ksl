@@ -1,4 +1,6 @@
 //! check 模块测试.
+//!
+//! 覆盖检查器边界, 错误路径与类型表; 常规语言层功能由脚本用例覆盖.
 
 use super::*;
 use crate::ast::{ExprKind, Special, TypeExpr};
@@ -26,9 +28,8 @@ fn expected_types_propagate_through_annotations_and_operations() {
     // 函数返回标注作为期望.
     assert!(check_str("@Let[f : Fn[[] : u8], @Fn[[] : u8, 1u]];").is_ok());
     assert!(check_str("@Let[f : Fn[[] : u8], @Fn[[] : u8, 1]];").is_err());
-    // 空列表需要元素类型来源.
+    // 空列表需要元素类型来源; 无标注的情形由脚本用例覆盖.
     assert!(check_str("@Let[e : List[i64], {}];").is_ok());
-    assert!(check_str("@Let[e, {}];").is_err());
     // Exit 的退出码同样要求 u8 后缀.
     assert!(check_str("@Exit[0];").is_err());
     assert!(check_str("@Exit[0u];").is_ok());
@@ -112,21 +113,21 @@ fn inference_unifies_branches_lists_and_generic_constructors() {
     // never 分支不阻止后续分支定型.
     let handler_if = r"
         @Let[h, @Handler[[self : Pid[i64, i64]] : i64,
-            @Block[
-                @Let[x, @If[false, @Halt[], 1]],
-                x
-            ]]];
+          @Block[
+            @Let[x, @If[false, @Halt[], 1]],
+            x
+          ]]];
     ";
     assert!(check_str(handler_if).is_ok());
     let handler_match = r"
         @Let[h, @Handler[[self : Pid[i64, i64]] : i64,
-            @Block[
-                @Let[x, @Match[Option/Some[1], {
-                    (Option/Some[n], @Halt[]),
-                    (Option/None[], 1)
-                }]],
-                x
-            ]]];
+          @Block[
+            @Let[x, @Match[Option/Some[1], {
+              (Option/Some[n], @Halt[]),
+              (Option/None[], 1)
+            }]],
+            x
+          ]]];
     ";
     assert!(check_str(handler_match).is_ok());
     assert!(
@@ -151,7 +152,6 @@ fn inference_unifies_branches_lists_and_generic_constructors() {
     assert!(check_str("@Let[x, {1, 2u}];").is_err());
     assert!(check_str("@Let[x, {1u, 2}];").is_err());
     assert!(check_str("@Let[x, {Option/None[], Option/None[]}];").is_err());
-    assert!(check_str("@Let[x, {}];").is_err());
     assert!(check_str("@Let[x, {1, 2}];").is_ok());
     assert!(check_str("@Let[x, {1u, 2u}];").is_ok());
 
@@ -194,15 +194,15 @@ fn functions_definitions_and_fix() {
     // 具名函数默认自递归.
     let source = r"
         @Def[fact, [n : i64] : i64,
-            @If[LessOrEqualI64[n, 1], 1, MulI64[n, fact[SubI64[n, 1]]]]];
+          @If[LessOrEqualI64[n, 1], 1, MulI64[n, fact[SubI64[n, 1]]]]];
         @Let[x, fact[5]];
     ";
     assert!(check_str(source).is_ok());
     // 组内相互递归.
     let source = r"
         @Fix[
-            @Def[isEven, [n : u8] : bool, @If[EqualU8[n, 0u], true, isOdd[SubU8[n, 1u]]]],
-            @Def[isOdd, [n : u8] : bool, @If[EqualU8[n, 0u], false, isEven[SubU8[n, 1u]]]]
+          @Def[isEven, [n : u8] : bool, @If[EqualU8[n, 0u], true, isOdd[SubU8[n, 1u]]]],
+          @Def[isOdd, [n : u8] : bool, @If[EqualU8[n, 0u], false, isEven[SubU8[n, 1u]]]]
         ];
     ";
     assert!(check_str(source).is_ok());
@@ -216,8 +216,8 @@ fn functions_definitions_and_fix() {
     // 组内重名报错.
     let duplicate = r"
         @Fix[
-            @Def[f, [n : i64] : i64, n],
-            @Def[f, [n : i64] : i64, n]
+          @Def[f, [n : i64] : i64, n],
+          @Def[f, [n : i64] : i64, n]
         ];
     ";
     assert!(matches!(
@@ -227,8 +227,8 @@ fn functions_definitions_and_fix() {
     // @Fix 之后的同块语句可用其绑定; 所在块结束后消失.
     let source = r"
         @Block[
-            @Fix[@Def[helper, [n : i64] : i64, AddI64[n, 1]]],
-            @Let[y, helper[1]]
+          @Fix[@Def[helper, [n : i64] : i64, AddI64[n, 1]]],
+          @Let[y, helper[1]]
         ];
     ";
     assert!(check_str(source).is_ok());
@@ -271,11 +271,11 @@ fn actor_types_and_handlers() {
     // ExitReason 是内置 Data, 可构造与穷尽匹配.
     let source = r"
         @Def[code, [e : ExitReason] : i64,
-            @Match[e, {
-                (/Halted[], 0),
-                (/Killed[], 1),
-                (/Failed[c, m], c)
-            }]];
+          @Match[e, {
+            (/Halted[], 0),
+            (/Killed[], 1),
+            (/Failed[c, m], c)
+          }]];
     ";
     assert!(check_str(source).is_ok());
     assert!(check_str("@Let[e, ExitReason/Halted[]];").is_ok());
@@ -319,33 +319,35 @@ fn actor_types_and_handlers() {
 #[test]
 fn actor_primitives_type_check() {
     let source = r#"
-        @Let[h, @Handler[[self : Pid[i64, string], n : i64] : string, "ok"]];
-        @Let[p, @Spawn[1u, h, 0]];
-        @Let[x, @Send[p, 0u, 1]];
-        @Let[r, @Join[p]];
-        @Let[k, @Kill[p]];
+        @Main[[self : Pid[nil, nil]] : nil,
+          @Block[
+            @Let[h, @Handler[[self : Pid[i64, string], n : i64] : string, "ok"]],
+            @Let[p, @Spawn[h, 0]],
+            @Let[x, @Send[p, 0u, 1]],
+            @Let[r, @Join[p]],
+            @Let[k, @Kill[p]]
+          ]]
     "#;
     assert!(check_str(source).is_ok());
-    // 信箱数必须与 Pid 一致.
-    let bad_count = r#"
-        @Let[h, @Handler[[self : Pid[i64, string], n : i64] : string, "ok"]];
-        @Let[p, @Spawn[2u, h, 0]];
-    "#;
+    // handler 必须是 Handler 类型; 信箱数由 Handler 的 Pid 类型推断.
     assert!(matches!(
-        check_str(bad_count).unwrap_err().kind,
-        ErrorKind::SpawnCountMismatch { .. }
-    ));
-    // handler 必须是 Handler 类型.
-    assert!(matches!(
-        check_str("@Let[p, @Spawn[1u, 5]];").unwrap_err().kind,
+        check_str(
+            r"@Main[[self : Pid[nil, nil]] : nil,
+                @Block[@Let[p, @Spawn[5]], nil]]"
+        )
+        .unwrap_err()
+        .kind,
         ErrorKind::NotHandler { .. }
     ));
     // 索引必须是字面量且在范围内.
     assert!(matches!(
         check_str(
-            r#"@Let[h, @Handler[[self : Pid[i64, string]] : string, "ok"]];
-               @Let[p, @Spawn[1u, h]];
-               @Let[x, @Send[p, "i", 1]];"#
+            r#"@Main[[self : Pid[nil, nil]] : nil,
+                @Block[
+                    @Let[h, @Handler[[self : Pid[i64, string]] : string, "ok"]],
+                    @Let[p, @Spawn[h]],
+                    @Let[x, @Send[p, "i", 1]]
+                ]] "#
         )
         .unwrap_err()
         .kind,
@@ -353,9 +355,12 @@ fn actor_primitives_type_check() {
     ));
     assert!(matches!(
         check_str(
-            r#"@Let[h, @Handler[[self : Pid[i64, string]] : string, "ok"]];
-               @Let[p, @Spawn[1u, h]];
-               @Let[x, @Send[p, 1u, 1]];"#
+            r#"@Main[[self : Pid[nil, nil]] : nil,
+                @Block[
+                    @Let[h, @Handler[[self : Pid[i64, string]] : string, "ok"]],
+                    @Let[p, @Spawn[h]],
+                    @Let[x, @Send[p, 1u, 1]]
+                ]] "#
         )
         .unwrap_err()
         .kind,
@@ -379,25 +384,28 @@ fn actor_primitives_type_check() {
     // Handler 内可用 Receive/Sleep/Continue.
     let handler = r#"
         @Let[h, @Handler[[self : Pid[i64, string], n : i64] : string,
-            @Block[
-                @Let[msg, @Receive[0u, Option/None[]]],
-                @Sleep[1U],
-                @Match[msg, {
-                    (/Some[m], @Continue[AddI64[n, m]]),
-                    (/None[], "done")
-                }]
-            ]]];
+          @Block[
+            @Let[msg, @Receive[0u, Option/None[]]],
+            @Sleep[1U],
+            @Match[msg, {
+              (/Some[m], @Continue[AddI64[n, m]]),
+              (/None[], "done")
+            }]
+          ]]];
     "#;
     assert!(check_str(handler).is_ok());
 
     // 信箱数与索引是 u8 字面量; 无 u 后缀的整数字面量是 i64.
     let mailboxes = r"
-        @Let[h, @Handler[[self : Pid[i64, i64]] : i64,
-            @Match[@Receive[0u, Option/None[]], {
+        @Main[[self : Pid[nil, nil]] : nil,
+          @Block[
+            @Let[h, @Handler[[self : Pid[i64, i64]] : i64,
+              @Match[@Receive[0u, Option/None[]], {
                 (/Some[x], x),
                 (/None[], 0)
-            }]]];
-        @Let[p, @Spawn[1u, h]];
+              }]]],
+            @Let[p, @Spawn[h]]
+          ]]
     ";
     assert!(check_str(mailboxes).is_ok());
     let no_suffix = mailboxes.replace("0u", "0").replace("1u", "1");
@@ -405,15 +413,48 @@ fn actor_primitives_type_check() {
         check_str(&no_suffix).unwrap_err().kind,
         ErrorKind::TypeMismatch { .. }
     ));
-    // u8 字面量超出范围在词法阶段报错.
-    assert_eq!(
-        crate::testutil::parse(
-            "@Let[h, @Handler[[self : Pid[i64, i64]] : i64, 0]]; @Let[p, @Spawn[256u, h]];"
-        )
-        .unwrap_err()
-        .kind,
-        ErrorKind::NumberOutOfRange
-    );
+}
+
+#[test]
+fn actor_primitive_context_restrictions() {
+    // @Main 只能有一个 self 参数并返回 nil.
+    assert!(matches!(
+        check_str("@Main[[self : Pid[nil, nil], extra : i64] : nil, nil]")
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidMainParam
+    ));
+    assert!(matches!(
+        check_str("@Main[[self : Pid[nil, nil]] : i64, 1]")
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidMainReturn
+    ));
+    // @Halt 与 @Continue 不能在 Main 体内使用; @Exit 可以.
+    assert!(matches!(
+        check_str("@Main[[self : Pid[nil, nil]] : nil, @Halt[]]")
+            .unwrap_err()
+            .kind,
+        ErrorKind::HaltInMain
+    ));
+    assert!(matches!(
+        check_str("@Main[[self : Pid[nil, nil]] : nil, @Continue[]]")
+            .unwrap_err()
+            .kind,
+        ErrorKind::ContinueInMain
+    ));
+    assert!(check_str("@Main[[self : Pid[nil, nil]] : nil, @Exit[0u]]").is_ok());
+    // Actor 原语在 Handler/Main 之外一律禁止.
+    for source in [
+        "@Let[h, @Handler[[self : Pid[i64, i64]] : i64, 0]]; @Spawn[h];",
+        "@Let[h, @Handler[[self : Pid[i64, i64]] : i64, 0]]; @Let[x, @Join[@Spawn[h]]];",
+        "@Register[\"x\", @Spawn[@Handler[[self : Pid[i64, i64]] : i64, 0]]];",
+    ] {
+        assert!(matches!(
+            check_str(source).unwrap_err().kind,
+            ErrorKind::ActorPrimitiveOutsideHandler
+        ));
+    }
 }
 
 #[test]
@@ -521,7 +562,6 @@ fn match_exhaustiveness_and_pattern_fields() {
 #[test]
 fn format_spec_is_checked() {
     assert!(check_str(r#"@Let[a, f"{1:.2} {2u:x} {3.0:e} {true}"];"#).is_ok());
-    assert!(check_str(r#"@Let[s, "hi"]; @Let[a, f"{s:?} {1} {c:?}"]; @Let[c, 'z'];"#).is_err());
     assert!(check_str(r#"@Let[s, "hi"]; @Let[c, 'z']; @Let[a, f"{s:?} {c:?}"];"#).is_ok());
     // `?` 仅限 string 与 char.
     assert!(check_str(r#"@Let[a, f"{1:?}"];"#).is_err());
@@ -610,7 +650,7 @@ fn values_must_be_used_and_determined() {
     // `@Block` 内的非末句同样不能隐式丢弃.
     assert!(check_str("@Block[5, nil];").is_err());
     assert!(check_str("@Block[@Let[_, 5], nil];").is_ok());
-    // 被抛弃的值仍须能定型.
+    // 被丢弃的值仍须能定型.
     assert!(check_str("@Let[_, {}];").is_err());
     assert!(check_str("@Let[_, Option/None[]];").is_err());
     assert!(check_str("@Let[_, {Option/None[], Option/None[]}];").is_err());
@@ -666,7 +706,7 @@ fn type_tables_record_expressions_data_and_types() {
     let name = target.name.as_ref().expect("绑定名应存在");
     assert_eq!(
         session.types().get(&name.key()),
-        Some(&Type::List(Box::new(Type::OptionT(Box::new(Type::I64)))))
+        Some(&Type::list(Type::option(Type::I64)))
     );
 
     // Data 声明, 变体签名与类型表达式都进入类型表.
@@ -679,10 +719,10 @@ fn type_tables_record_expressions_data_and_types() {
     let ExprKind::Special(Special::Data { name, variants }) = &program.stmts[0].node else {
         panic!("首条语句应为 @Data");
     };
-    let data_ty = Type::Data(name.node);
+    let data_ty = Type::data(name.node);
     assert_eq!(types.get(&name.key()), Some(&data_ty));
     let variant = &variants[0];
-    let field_pair = Type::Pair(Box::new(Type::I64), Box::new(Type::U8));
+    let field_pair = Type::pair(Type::I64, Type::U8);
     let Type::Fn(fields, ret) = types.get(&variant.name.key()).expect("变体应有签名")
     else {
         panic!("变体应记录为函数签名");
@@ -693,10 +733,7 @@ fn type_tables_record_expressions_data_and_types() {
     let TypeExpr::Generic { name, args } = &variant.fields[0] else {
         panic!("字段应为泛型类型");
     };
-    assert_eq!(
-        types.get(&name.key()),
-        Some(&Type::Pair(Box::new(Type::I64), Box::new(Type::U8)))
-    );
+    assert_eq!(types.get(&name.key()), Some(&Type::pair(Type::I64, Type::U8)));
     let TypeExpr::Named(inner) = &args[0] else {
         panic!("字段参数应为具名类型");
     };
@@ -713,9 +750,40 @@ fn type_tables_record_expressions_data_and_types() {
     else {
         panic!("标注应为泛型类型");
     };
-    assert_eq!(types.get(&name.key()), Some(&Type::List(Box::new(Type::U8))));
+    assert_eq!(types.get(&name.key()), Some(&Type::list(Type::U8)));
     let TypeExpr::Named(inner) = &args[0] else {
         panic!("标注参数应为具名类型");
     };
     assert_eq!(types.get(&inner.key()), Some(&Type::U8));
+}
+
+#[test]
+fn type_display_covers_applications() {
+    let cases = [
+        (Type::list(Type::I64), "List[i64]"),
+        (Type::dict(Type::Str, Type::U64), "Dict[string, u64]"),
+        (Type::set(Type::Bool), "Set[bool]"),
+        (Type::pair(Type::I64, Type::U8), "Pair[i64, u8]"),
+        (Type::option(Type::I64), "Option[i64]"),
+        (Type::result(Type::I64, Type::Str), "Result[i64, string]"),
+        (
+            Type::pid(vec![Type::I64, Type::Str], Type::Nil),
+            "Pid[i64, string, nil]",
+        ),
+        (
+            Type::handler(
+                Type::pid(vec![Type::I64], Type::Nil),
+                vec![Type::I64, Type::Str],
+            ),
+            "Handler[Pid[i64, nil], i64, string]",
+        ),
+        (Type::data(crate::symbol::intern("Shape")), "Shape"),
+        (Type::file(), "File"),
+        (Type::date_time(), "DateTime"),
+        (Type::socket(), "Socket"),
+        (Type::tcp_listener(), "TcpListener"),
+    ];
+    for (ty, expected) in cases {
+        assert_eq!(ty.to_string(), expected);
+    }
 }

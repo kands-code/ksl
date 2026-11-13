@@ -31,6 +31,7 @@ pub fn parse(tokens: &[Token]) -> Result<Program, KslError> {
         tokens,
         pos: 0,
         context: Context::Top,
+        in_main: false,
         source: tokens.first().map_or(SourceId::default(), |t| t.span.source),
         next_node: 0,
     };
@@ -71,6 +72,8 @@ struct Parser<'t> {
     source: SourceId,
     /// 当前解析上下文; 进入嵌套表达式时切换, 返回时恢复.
     context: Context,
+    /// 是否正在解析 `@Main` 体; `@Exit` 只在此处允许出现在非顶层位置.
+    in_main: bool,
     /// 下一个节点编号; 每次解析从 0 开始, 与 `SourceId` 共同构成唯一键.
     next_node: u32,
 }
@@ -190,7 +193,21 @@ impl<'t> Parser<'t> {
         self.context = saved;
         let node = result?;
         let end = self.tokens[self.pos.saturating_sub(1)].span.end;
-        Ok(self.spanned(node, Span::new(self.source, start, end)))
+        let mut expr = self.spanned(node, Span::new(self.source, start, end));
+        // 后缀调用: 任意表达式后可跟任意多 `[参数]`; 与名字调用共用
+        // 同一套参数语法. 是否可调用由检查器判定, 语法层不做限制.
+        while self.at_simple(&TokenKind::LBracket) {
+            self.bump();
+            let (args, close) = self.bracket_exprs()?;
+            expr = self.spanned(
+                ExprKind::Apply {
+                    callee: Box::new(expr),
+                    args,
+                },
+                Span::new(self.source, start, close.end),
+            );
+        }
+        Ok(expr)
     }
 
     fn expr_inner(&mut self) -> Result<ExprKind, KslError> {

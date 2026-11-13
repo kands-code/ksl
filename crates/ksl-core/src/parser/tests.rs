@@ -36,8 +36,8 @@ fn parses_language_forms() {
     let source = r"
         @Def[addOne, [x : i64] : i64, AddI64[x, 1]];
         @Fix[
-            @Def[isEven, [n : u8] : bool, true],
-            @Def[isOdd, [n : u8] : bool, false]
+          @Def[isEven, [n : u8] : bool, true],
+          @Def[isOdd, [n : u8] : bool, false]
         ];
     ";
     assert!(parse_str(source).is_ok());
@@ -135,7 +135,7 @@ fn rejects_invalid_syntax() {
         "@Data[D, {A[], B[i64],}];",
         "@Block[1,];",
         "@Fix[@Def[f, [] : i64, 1],];",
-        "@Spawn[1u, h,];",
+        "@Spawn[h,];",
         "@ListMap[xs, f,];",
         "(1, 2,);",
     ] {

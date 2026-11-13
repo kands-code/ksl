@@ -22,10 +22,7 @@ pub(crate) fn print(_: &[String], a: &[Value], _: Option<Span>) -> Result<Value,
     let Some(Value::Str(text)) = a.first() else {
         return Err(Error::internal("Print 的实参形态不符"));
     };
-    let mut line = String::with_capacity(text.len() + 1);
-    line.push_str(text.as_ref());
-    line.push('\n');
-    crate::io::write_stdout(&line).map_err(|err| output_error(&err, "标准输出"))?;
+    crate::io::print(text)?;
     Ok(Value::Nil)
 }
 
@@ -36,7 +33,7 @@ pub(crate) fn print_raw(_: &[String], a: &[Value], _: Option<Span>) -> Result<Va
     let Some(Value::Str(text)) = a.first() else {
         return Err(Error::internal("PrintRaw 的实参形态不符"));
     };
-    crate::io::write_stdout(text.as_ref()).map_err(|err| output_error(&err, "标准输出"))?;
+    crate::io::print_raw(text)?;
     Ok(Value::Nil)
 }
 
@@ -44,17 +41,8 @@ pub(crate) fn print_error(_: &[String], a: &[Value], _: Option<Span>) -> Result<
     let Some(Value::Str(text)) = a.first() else {
         return Err(Error::internal("PrintError 的实参形态不符"));
     };
-    crate::io::write_stderr(text.as_ref()).map_err(|err| output_error(&err, "标准错误"))?;
+    crate::io::print_error(text)?;
     Ok(Value::Nil)
-}
-
-/// 把输出流错误转为运行时错误; 下游关闭管道时不再当作实现缺陷.
-pub(crate) fn output_error(error: &std::io::Error, target: &str) -> Error {
-    if error.kind() == std::io::ErrorKind::BrokenPipe {
-        Error::BrokenPipe
-    } else {
-        Error::internal(format!("写出{target}失败: {error}"))
-    }
 }
 
 /// 取命令行参数; 不会失败, 返回值恒为列表.

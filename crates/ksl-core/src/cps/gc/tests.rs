@@ -20,6 +20,36 @@ fn run(session: &mut Session, scheduler: &mut Scheduler, source: &str) -> Value 
         .expect("脚本应可运行")
 }
 
+/// 从返回 Handler 蓝图的剧本中取 self 信箱数.
+fn handler_mailboxes(program: &crate::ast::Program, session: &Session) -> usize {
+    let tail = program.tail.as_ref().expect("剧本应有尾表达式");
+    let ty = session.types().get(&tail.key()).expect("尾表达式应有类型");
+    let Some((pid, _)) = ty.as_handler() else {
+        panic!("尾表达式应是 Handler");
+    };
+    let Some((mailboxes, _)) = pid.as_pid() else {
+        panic!("Handler 的 self 应是 Pid");
+    };
+    mailboxes.len()
+}
+
+/// 执行一个返回 Handler 的剧本, 再以根 Actor 运行该 Handler.
+fn run_handler(
+    session: &mut Session,
+    scheduler: &mut Scheduler,
+    source: &str,
+    args: Vec<Value>,
+) -> Value {
+    let program = checked(session, source);
+    let handler = scheduler
+        .run_program(&program, session.types())
+        .expect("Handler 蓝图应可求值");
+    let mailboxes = handler_mailboxes(&program, session);
+    scheduler
+        .run_main_with_args(handler, mailboxes, args)
+        .expect("Handler 应可运行")
+}
+
 fn find_pid(value: &Value) -> Option<Arc<ActorHandle>> {
     match value {
         Value::Pid(pid) => Some(Arc::clone(pid)),
@@ -49,7 +79,7 @@ fn recursive_closures_follow_reachability() {
         &mut scheduler,
         r"
         @Def[count, [n : i64] : i64,
-            @If[EqualI64[n, 0], 0, count[SubI64[n, 1]]]];
+          @If[EqualI64[n, 0], 0, count[SubI64[n, 1]]]];
         count
         ",
     );
@@ -72,7 +102,7 @@ fn recursive_closures_follow_reachability() {
         &mut scheduler,
         r"
         @Def[unused, [n : i64] : i64,
-            @If[EqualI64[n, 0], 0, unused[SubI64[n, 1]]]];
+          @If[EqualI64[n, 0], 0, unused[SubI64[n, 1]]]];
         unused
         ",
     );
@@ -100,30 +130,31 @@ fn actor_result_cycle_is_collected() {
     let mut session = Session::new();
     let mut scheduler = Scheduler::new();
 
-    let value = run(
+    let value = run_handler(
         &mut session,
         &mut scheduler,
         r"
         @Data[D, {C[Pid[D, D]]}];
-        @Block[
-            @Let[w, @Handler[[self : Pid[D, D]] : D,
-                @Block[
-                    @Let[msg, @Receive[0u, Option/Some[1000U]]],
-                    @Match[msg, {
-                        (/Some[d], d),
-                        (/None[], D/C[self])
-                    }]
-                ]]],
-            @Block[
-                @Let[p, @Spawn[1u, w]],
-                @Let[s, @Send[p, 0u, D/C[p]]],
-                @Match[@Join[p], {
-                    (/Ok[r], r),
-                    (/Err[e], D/C[p])
-                }]
-            ]
-        ]
+        @Let[worker, @Handler[[self : Pid[D, D]] : D,
+          @Block[
+            @Let[msg, @Receive[0u, Option/Some[1000U]]],
+            @Match[msg, {
+              (/Some[d], d),
+              (/None[], D/C[self])
+            }]
+          ]]];
+        @Let[main, @Handler[[self : Pid[nil, D]] : D,
+          @Block[
+            @Let[p, @Spawn[worker]],
+            @Let[s, @Send[p, 0u, D/C[p]]],
+            @Match[@Join[p], {
+              (/Ok[r], r),
+              (/Err[e], D/C[p])
+            }]
+          ]]];
+        main
         ",
+        Vec::new(),
     );
     let pid = find_pid(&value).expect("结果应包含自身的 Pid");
     let weak = Arc::downgrade(&pid);
@@ -147,7 +178,7 @@ fn automatic_collection_roots_rollback_snapshot() {
         &mut scheduler,
         r"
         @Def[f, [n : i64] : i64,
-            @If[EqualI64[n, 0], 0, f[SubI64[n, 1]]]];
+          @If[EqualI64[n, 0], 0, f[SubI64[n, 1]]]];
         f
         ",
     );
@@ -164,7 +195,7 @@ fn automatic_collection_roots_rollback_snapshot() {
         &mut session,
         r"
         @Def[f, [n : i64] : i64,
-            @If[EqualI64[n, 0], 0, f[SubI64[n, 1]]]];
+          @If[EqualI64[n, 0], 0, f[SubI64[n, 1]]]];
         @Let[_, f[2000]];
         DivideI64[1, 0]
         ",
@@ -190,33 +221,43 @@ fn suspended_actor_survives_collection() {
     let mut session = Session::new();
     let mut scheduler = Scheduler::new();
 
-    let value = run(
+    let worker = run_handler(
         &mut session,
         &mut scheduler,
         r"
         @Let[w, @Handler[[self : Pid[i64, i64]] : i64,
-            @Match[@Receive[0u, Option/None[]], {
-                (/Some[m], m),
-                (/None[], 0)
-            }]]];
-        @Let[p, @Spawn[1u, w]];
-        nil
+          @Match[@Receive[0u, Option/None[]], {
+            (/Some[m], m),
+            (/None[], 0)
+          }]]];
+        @Let[starter, @Handler[[self : Pid[nil, Pid[i64, i64]]] : Pid[i64, i64],
+          @Block[
+            @Let[p, @SpawnDetached[w]],
+            p
+          ]]];
+        starter
         ",
+        Vec::new(),
     );
-    assert!(matches!(value, Value::Nil));
+    assert!(matches!(worker, Value::Pid(_)));
 
-    scheduler.collect_cycles(&[]);
+    scheduler.collect_cycles(std::slice::from_ref(&worker));
 
-    let result = run(
+    let result = run_handler(
         &mut session,
         &mut scheduler,
         r"
-        @Let[s, @Send[p, 0u, 5]];
-        @Match[@Join[p], {
-            (/Ok[v], v),
-            (/Err[e], 0)
-        }]
+        @Let[consumer, @Handler[[self : Pid[nil, i64], p : Pid[i64, i64]] : i64,
+          @Block[
+            @Let[s, @Send[p, 0u, 5]],
+            @Match[@Join[p], {
+              (/Ok[v], v),
+              (/Err[e], 0)
+            }]
+          ]]];
+        consumer
         ",
+        vec![worker],
     );
     assert!(matches!(result, Value::I64(5)), "挂起 Actor 应继续正常工作");
     scheduler.shutdown();

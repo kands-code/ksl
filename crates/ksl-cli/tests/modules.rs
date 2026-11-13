@@ -38,6 +38,26 @@ fn run_in(root: &TempDir, args: &[&str], input: &str) -> (String, String) {
 }
 
 #[test]
+fn repl_initialization_skips_main() {
+    let root = temp_root();
+    fs::write(
+        root.path().join("init.ksl"),
+        "@Let[value, 42];\n@Export[value];\n@Main[[self : Pid[nil, nil]] : nil, Print[\"MAIN \
+         RAN\"]];\n",
+    )
+    .expect("初始化文件应可写入");
+    let (stdout, stderr) = run_in(&root, &["repl", "init.ksl"], "value\n%quit\n");
+    assert!(
+        stdout.contains("42"),
+        "初始化文件的导出应可见: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("MAIN RAN"),
+        "REPL 初始化不应执行 @Main: {stdout}{stderr}"
+    );
+}
+
+#[test]
 fn run_executes_modules_and_imports() {
     let root = temp_root();
     fs::write(

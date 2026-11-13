@@ -1,0 +1,49 @@
+# 纯文本点对点聊天入口: 一端监听, 另一端连接.
+#
+# 两个终端:
+#   cargo run -p ksl-cli -- run main.ksl -- listen 9000
+#   cargo run -p ksl-cli -- run main.ksl -- connect 9000
+#
+# 输入一行后按 Enter 发送; Ctrl-D 离开. 本示例只使用回环地址, 明文传输.
+
+@Use[{^ChatEvent, usage, coordinator}, "lib/chat"];
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[args, Args[]],
+    @If[LessU64[@ListLength[args], 2U],
+      Print[usage],
+      @Block[
+        @Let[command, @ListGet[args, 0U]],
+        @Let[port, @Match[ParseU64[@ListGet[args, 1U]], {
+          (/Ok[value], value),
+          (/Err[_error], @Exit[2u])
+        }]],
+        @If[EqualString[command, "listen"],
+          @Match[TcpListen["127.0.0.1", port], {
+            (/Ok[listener], @Match[TcpAccept[listener, 60000U], {
+              (/Ok[socket], @Block[
+                @Let[_closed, TcpCloseListener[listener]],
+                @Let[chat : Pid[ChatEvent, nil], @Spawn[coordinator, socket, false]],
+                @Let[_result, @Join[chat]],
+                nil
+              ]),
+              (/Err[_error], Print["等待连接失败"])
+            }]),
+            (/Err[_error], Print["监听失败"])
+          }],
+          @If[EqualString[command, "connect"],
+            @Match[TcpConnect["127.0.0.1", port, 5000U], {
+              (/Ok[socket], @Block[
+                @Let[chat : Pid[ChatEvent, nil], @Spawn[coordinator, socket, false]],
+                @Let[_result, @Join[chat]],
+                nil
+              ]),
+              (/Err[_error], Print["连接失败"])
+            }],
+            Print[usage]
+          ]
+        ]
+      ]
+    ]
+  ]]

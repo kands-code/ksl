@@ -3,8 +3,6 @@
 //! 同步实现同时供内置函数表, 固定 I/O 线程池与专用输入线程使用; 走调度器时
 //! 由 `cps::exec` 提交任务, 抽象机挂起, 完成后唤醒, 避免阻塞其他 Actor.
 
-#![allow(clippy::unnecessary_wraps)] // 统一 Result 外形, 供工作线程与同步路径共用.
-
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::sync::Arc;
@@ -19,7 +17,18 @@ use crate::value::{
 };
 
 mod input;
+pub(crate) mod net;
 mod pool;
+mod service;
+
+pub(crate) use input::open_session as open_terminal_session;
+pub use input::{read_repl_line, take_buffered_line, take_buffered_text};
+pub(crate) use net::cancel as cancel_task;
+pub use net::{SocketHandle, TcpListenerHandle};
+pub(crate) use service::{flush as flush_output, print, print_error, print_raw};
+
+/// I/O 完成回调; 由调度器提交, 服务或工作线程保证调用一次.
+type Done = Box<dyn FnOnce(Result<Value, Error>) + Send + 'static>;
 
 /// 是否正在跟踪标准输出的行首状态.
 ///
@@ -77,7 +86,10 @@ pub fn write_stderr(text: &str) -> std::io::Result<()> {
 }
 
 /// 开启标准输出的行首与写出跟踪.
+///
+/// 先冲刷服务中已排队的输出, 避免上一段输出落入本次跟踪窗口.
 pub fn begin_stdout_tracking() {
+    let _ = flush_output();
     STDOUT_AT_LINE_START.store(true, Ordering::Relaxed);
     STDOUT_WROTE.store(false, Ordering::Relaxed);
     STDOUT_TRACKING.store(true, Ordering::Relaxed);
@@ -85,9 +97,10 @@ pub fn begin_stdout_tracking() {
 
 /// 结束行首跟踪, 返回输出当前是否停在行首.
 ///
-/// 未开启跟踪时返回真, 即视为停在行首.
+/// 先冲刷服务中已排队的输出; 未开启跟踪时返回真, 即视为停在行首.
 #[must_use]
 pub fn take_stdout_line_start() -> bool {
+    let _ = flush_output();
     STDOUT_TRACKING.store(false, Ordering::Relaxed);
     STDOUT_AT_LINE_START.load(Ordering::Relaxed)
 }
@@ -95,6 +108,7 @@ pub fn take_stdout_line_start() -> bool {
 /// 取本次跟踪期间标准输出是否写过非空文本.
 #[must_use]
 pub fn take_stdout_wrote() -> bool {
+    let _ = flush_output();
     let wrote = STDOUT_WROTE.load(Ordering::Relaxed);
     STDOUT_WROTE.store(false, Ordering::Relaxed);
     wrote
@@ -102,6 +116,7 @@ pub fn take_stdout_wrote() -> bool {
 
 /// 开启标准错误的写出跟踪.
 pub fn begin_stderr_tracking() {
+    let _ = flush_output();
     STDERR_WROTE.store(false, Ordering::Relaxed);
     STDERR_TRACKING.store(true, Ordering::Relaxed);
 }
@@ -109,6 +124,7 @@ pub fn begin_stderr_tracking() {
 /// 结束标准错误跟踪, 返回本次是否写过非空文本.
 #[must_use]
 pub fn take_stderr_wrote() -> bool {
+    let _ = flush_output();
     STDERR_TRACKING.store(false, Ordering::Relaxed);
     let wrote = STDERR_WROTE.load(Ordering::Relaxed);
     STDERR_WROTE.store(false, Ordering::Relaxed);
@@ -132,73 +148,79 @@ enum FileInner {
     Write(BufWriter<File>),
 }
 
-/// I/O 任务类别; 调度器据此区分终端输入与普通阻塞操作.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum IoKind {
-    /// 标准输入读取.
-    Input,
-    /// 文件或其他阻塞操作.
-    Blocking,
-}
-
-/// 待执行的 I/O 任务; 终端读取由专用输入线程处理, 其余进入阻塞线程池.
+/// 待执行的 I/O 任务; 终端读取走输入线程, 文件走阻塞线程池, 套接字走网络事件线程.
 pub(crate) enum Task {
     Blocking(Blocking),
-    Line(String),
+    /// 标准输入行读取; `plain` 为真时不使用内置行编辑器.
+    Line {
+        prompt: String,
+        plain: bool,
+    },
     Key,
+    Network(net::NetTask),
+    /// 立即完成的 I/O 结果, 用于参数校验失败等无需挂起的路径.
+    Ready(Value),
 }
 
-type Blocking = Box<dyn FnOnce() -> Result<Value, Error> + Send + 'static>;
+type Blocking = Box<dyn FnOnce() -> Value + Send + 'static>;
 
 impl Task {
-    fn blocking(job: impl FnOnce() -> Result<Value, Error> + Send + 'static) -> Self {
+    fn blocking(job: impl FnOnce() -> Value + Send + 'static) -> Self {
         Self::Blocking(Box::new(job))
-    }
-
-    #[must_use]
-    pub(crate) fn kind(&self) -> IoKind {
-        match self {
-            Self::Line(_) | Self::Key => IoKind::Input,
-            Self::Blocking(_) => IoKind::Blocking,
-        }
     }
 }
 
 /// 提交 I/O 任务; 完成回调把结果交给调度器.
 ///
-/// `cancel` 只对终端读取生效; 文件操作无法中断, 完成后结果由调度器丢弃.
+/// `cancel` 用于终端读取与网络操作; 文件操作无法中断, 完成后结果由调度器丢弃.
 pub(crate) fn submit_task(
     task: Task,
+    op_id: u64,
     cancel: Arc<AtomicBool>,
     done: impl FnOnce(Result<Value, Error>) + Send + 'static,
 ) {
     match task {
         Task::Blocking(job) => {
             drop(cancel);
-            pool::submit(Box::new(move || done(job())));
+            pool::submit(Box::new(move || done(Ok(job()))));
         },
-        Task::Line(prompt) => input::submit_line(prompt, cancel, done),
-        Task::Key => input::submit_key(cancel, done),
+        // 输入请求与输出共用服务邮箱; 服务把阻塞读取交给输入线程,
+        // 自身继续处理后续输出请求.
+        Task::Line { prompt, plain } => {
+            let _ = service::read_line(prompt, plain, cancel, Box::new(done));
+        },
+        Task::Key => {
+            let _ = service::read_key(cancel, Box::new(done));
+        },
+        Task::Network(job) => net::submit(job, op_id, cancel, Box::new(done)),
+        Task::Ready(value) => done(Ok(value)),
     }
 }
 
-/// 同步执行 I/O 任务; 没有调度器时走此路径.
-pub(crate) fn run_task(task: Task) -> Result<Value, Error> {
-    match task {
-        Task::Blocking(job) => job(),
-        Task::Line(prompt) => input::read_line(&prompt, &AtomicBool::new(false)),
-        Task::Key => input::read_key(&AtomicBool::new(false)),
-    }
-}
-
-/// I/O 任务构造器; 注册表直接持有, 不再按名字二次分派.
+/// I/O 任务构造器; 注册表直接持有, 不按名字二次分派.
+///
+/// 返回 `Result` 是构造器签名的统一形态; 可恢复的语言层失败以
+/// `Task::Ready` 携带 `Result` 值返回, `Err` 只用于内部形态错误.
 pub(crate) type Builder = fn(&[Value], Option<Span>) -> Result<Task, Error>;
 
 pub(crate) fn read_line_task(args: &[Value], _: Option<Span>) -> Result<Task, Error> {
     let prompt = string_arg(args, 0, "ReadLine 的提示")?;
-    Ok(Task::Line(prompt.to_string()))
+    Ok(Task::Line {
+        prompt: prompt.to_string(),
+        plain: false,
+    })
 }
 
+pub(crate) fn read_line_plain_task(args: &[Value], _: Option<Span>) -> Result<Task, Error> {
+    let prompt = string_arg(args, 0, "ReadLinePlain 的提示")?;
+    Ok(Task::Line {
+        prompt: prompt.to_string(),
+        plain: true,
+    })
+}
+
+/// 构造器签名由注册表统一为 `Result`, 本函数不会失败.
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn read_key_task(_: &[Value], _: Option<Span>) -> Result<Task, Error> {
     Ok(Task::Key)
 }
@@ -280,28 +302,26 @@ pub(crate) fn copy_file_task(args: &[Value], _: Option<Span>) -> Result<Task, Er
 pub(crate) fn is_path_exists_task(args: &[Value], _: Option<Span>) -> Result<Task, Error> {
     let path = string_arg(args, 0, "IsPathExists 的路径")?;
     Ok(Task::blocking(move || {
-        Ok(Value::Bool(std::fs::metadata(path.as_ref()).is_ok()))
+        Value::Bool(std::fs::metadata(path.as_ref()).is_ok())
     }))
 }
 
 pub(crate) fn is_file_task(args: &[Value], _: Option<Span>) -> Result<Task, Error> {
     let path = string_arg(args, 0, "IsFile 的路径")?;
     Ok(Task::blocking(move || {
-        Ok(Value::Bool(
-            std::fs::metadata(path.as_ref()).is_ok_and(|metadata| metadata.is_file()),
-        ))
+        Value::Bool(std::fs::metadata(path.as_ref()).is_ok_and(|metadata| metadata.is_file()))
     }))
 }
 
 pub(crate) fn is_directory_task(args: &[Value], _: Option<Span>) -> Result<Task, Error> {
     let path = string_arg(args, 0, "IsDirectory 的路径")?;
     Ok(Task::blocking(move || {
-        Ok(Value::Bool(
-            std::fs::metadata(path.as_ref()).is_ok_and(|metadata| metadata.is_dir()),
-        ))
+        Value::Bool(std::fs::metadata(path.as_ref()).is_ok_and(|metadata| metadata.is_dir()))
     }))
 }
 
+/// 构造器签名由注册表统一为 `Result`, 本函数不会失败.
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn get_current_directory_task(_: &[Value], _: Option<Span>) -> Result<Task, Error> {
     Ok(Task::blocking(get_current_directory))
 }
@@ -410,224 +430,217 @@ pub(super) fn strip_line_ending(mut line: String) -> String {
     line
 }
 
-fn read_file(path: &str) -> Result<Value, Error> {
+fn read_file(path: &str) -> Value {
     match std::fs::read_to_string(path) {
-        Ok(text) => Ok(result_ok(Value::Str(Arc::from(text)))),
+        Ok(text) => result_ok(Value::Str(Arc::from(text))),
         Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-            Ok(result_err(io_error("InvalidUtf8", path)))
+            result_err(io_error("InvalidUtf8", path))
         },
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn write_file(path: &str, contents: &str) -> Result<Value, Error> {
+fn write_file(path: &str, contents: &str) -> Value {
     match std::fs::write(path, contents) {
-        Ok(()) => Ok(result_ok(Value::Nil)),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(()) => result_ok(Value::Nil),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn read_file_bytes(path: &str) -> Result<Value, Error> {
+fn read_file_bytes(path: &str) -> Value {
     match std::fs::read(path) {
-        Ok(bytes) => Ok(result_ok(Value::List(Arc::new(crate::value::List::u8s(bytes))))),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(bytes) => result_ok(Value::List(Arc::new(crate::value::List::u8s(bytes)))),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn write_file_bytes(path: &str, bytes: &[u8]) -> Result<Value, Error> {
+fn write_file_bytes(path: &str, bytes: &[u8]) -> Value {
     match std::fs::write(path, bytes) {
-        Ok(()) => Ok(result_ok(Value::Nil)),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(()) => result_ok(Value::Nil),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn append_file(path: &str, bytes: &[u8]) -> Result<Value, Error> {
+fn append_file(path: &str, bytes: &[u8]) -> Value {
     let mut file = match OpenOptions::new().append(true).create(true).open(path) {
         Ok(file) => file,
-        Err(error) => return Ok(result_err(io_error_for(&error, path))),
+        Err(error) => return result_err(io_error_for(&error, path)),
     };
     match file.write_all(bytes) {
-        Ok(()) => Ok(result_ok(Value::Nil)),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(()) => result_ok(Value::Nil),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn list_directory(path: &str) -> Result<Value, Error> {
+fn list_directory(path: &str) -> Value {
     let entries = match std::fs::read_dir(path) {
         Ok(entries) => entries,
-        Err(error) => return Ok(result_err(io_error_for(&error, path))),
+        Err(error) => return result_err(io_error_for(&error, path)),
     };
     let mut names = Vec::new();
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(error) => return Ok(result_err(io_error_for(&error, path))),
+            Err(error) => return result_err(io_error_for(&error, path)),
         };
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
-            return Ok(result_err(io_error("Other", "目录条目名不是有效 UTF-8")));
+            return result_err(io_error("Other", "目录条目名不是有效 UTF-8"));
         };
         names.push(name.to_string());
     }
     names.sort();
-    Ok(result_ok(crate::value::list(
+    result_ok(crate::value::list(
         names.into_iter().map(|name| Value::Str(Arc::from(name))),
-    )))
+    ))
 }
 
-fn create_directory(path: &str, recursive: bool) -> Result<Value, Error> {
+fn create_directory(path: &str, recursive: bool) -> Value {
     let result = if recursive {
         std::fs::create_dir_all(path)
     } else {
         std::fs::create_dir(path)
     };
     match result {
-        Ok(()) => Ok(result_ok(Value::Nil)),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(()) => result_ok(Value::Nil),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn remove_directory(path: &str) -> Result<Value, Error> {
+fn remove_directory(path: &str) -> Value {
     match std::fs::remove_dir(path) {
-        Ok(()) => Ok(result_ok(Value::Nil)),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(()) => result_ok(Value::Nil),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn remove_file(path: &str) -> Result<Value, Error> {
+fn remove_file(path: &str) -> Value {
     match std::fs::remove_file(path) {
-        Ok(()) => Ok(result_ok(Value::Nil)),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(()) => result_ok(Value::Nil),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn rename_path(from: &str, to: &str) -> Result<Value, Error> {
+fn rename_path(from: &str, to: &str) -> Value {
     match std::fs::rename(from, to) {
-        Ok(()) => Ok(result_ok(Value::Nil)),
-        Err(error) => Ok(result_err(io_error_for_pair(&error, from, to))),
+        Ok(()) => result_ok(Value::Nil),
+        Err(error) => result_err(io_error_for_pair(&error, from, to)),
     }
 }
 
-fn copy_file(from: &str, to: &str) -> Result<Value, Error> {
+fn copy_file(from: &str, to: &str) -> Value {
     match std::fs::copy(from, to) {
-        Ok(_) => Ok(result_ok(Value::Nil)),
-        Err(error) => Ok(result_err(io_error_for_pair(&error, from, to))),
+        Ok(_) => result_ok(Value::Nil),
+        Err(error) => result_err(io_error_for_pair(&error, from, to)),
     }
 }
 
-fn get_current_directory() -> Result<Value, Error> {
+fn get_current_directory() -> Value {
     match std::env::current_dir() {
-        Ok(path) => Ok(result_ok(Value::Str(Arc::from(
-            path.to_string_lossy().as_ref(),
-        )))),
-        Err(error) => Ok(result_err(io_error("Other", &error.to_string()))),
+        Ok(path) => result_ok(Value::Str(Arc::from(path.to_string_lossy().as_ref()))),
+        Err(error) => result_err(io_error("Other", &error.to_string())),
     }
 }
 
-fn open_read(path: &str) -> Result<Value, Error> {
+fn open_read(path: &str) -> Value {
     match File::open(path) {
-        Ok(file) => Ok(result_ok(file_value(
-            FileInner::Read(BufReader::new(file)),
-            path,
-        ))),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(file) => result_ok(file_value(FileInner::Read(BufReader::new(file)), path)),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn open_write(path: &str, append: bool) -> Result<Value, Error> {
+fn open_write(path: &str, append: bool) -> Value {
     let result = if append {
         OpenOptions::new().append(true).create(true).open(path)
     } else {
         File::create(path)
     };
     match result {
-        Ok(file) => Ok(result_ok(file_value(
-            FileInner::Write(BufWriter::new(file)),
-            path,
-        ))),
-        Err(error) => Ok(result_err(io_error_for(&error, path))),
+        Ok(file) => result_ok(file_value(FileInner::Write(BufWriter::new(file)), path)),
+        Err(error) => result_err(io_error_for(&error, path)),
     }
 }
 
-fn close(handle: &FileHandle) -> Result<Value, Error> {
+fn close(handle: &FileHandle) -> Value {
     let mut inner = handle.inner.lock();
     match inner.take() {
-        None => Ok(result_err(io_error("InvalidHandle", ""))),
-        Some(FileInner::Read(_)) => Ok(result_ok(Value::Nil)),
+        None => result_err(io_error("InvalidHandle", "")),
+        Some(FileInner::Read(_)) => result_ok(Value::Nil),
         Some(FileInner::Write(mut writer)) => match writer.flush() {
-            Ok(()) => Ok(result_ok(Value::Nil)),
-            Err(error) => Ok(result_err(io_error("Other", &error.to_string()))),
+            Ok(()) => result_ok(Value::Nil),
+            Err(error) => result_err(io_error("Other", &error.to_string())),
         },
     }
 }
 
-fn flush(handle: &FileHandle) -> Result<Value, Error> {
+fn flush(handle: &FileHandle) -> Value {
     let mut inner = handle.inner.lock();
     match inner.as_mut() {
-        None => Ok(result_err(io_error("InvalidHandle", ""))),
-        Some(FileInner::Read(_)) => Ok(result_ok(Value::Nil)),
+        None => result_err(io_error("InvalidHandle", "")),
+        Some(FileInner::Read(_)) => result_ok(Value::Nil),
         Some(FileInner::Write(writer)) => match writer.flush() {
-            Ok(()) => Ok(result_ok(Value::Nil)),
-            Err(error) => Ok(result_err(io_error("Other", &error.to_string()))),
+            Ok(()) => result_ok(Value::Nil),
+            Err(error) => result_err(io_error("Other", &error.to_string())),
         },
     }
 }
 
-fn read_line_from(handle: &FileHandle) -> Result<Value, Error> {
+fn read_line_from(handle: &FileHandle) -> Value {
     let mut inner = handle.inner.lock();
     match inner.as_mut() {
-        None | Some(FileInner::Write(_)) => Ok(result_err(io_error("InvalidHandle", ""))),
+        None => result_err(io_error("InvalidHandle", "")),
+        Some(FileInner::Write(_)) => result_err(io_error("NotReadable", "")),
         Some(FileInner::Read(reader)) => {
             let mut line = String::new();
             match reader.read_line(&mut line) {
-                Ok(0) => Ok(result_ok(option_none())),
-                Ok(_) => Ok(result_ok(option_some(Value::Str(Arc::from(
-                    strip_line_ending(line),
-                ))))),
+                Ok(0) => result_ok(option_none()),
+                Ok(_) => result_ok(option_some(Value::Str(Arc::from(strip_line_ending(line))))),
                 Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                    Ok(result_err(io_error("InvalidUtf8", &handle.path)))
+                    result_err(io_error("InvalidUtf8", &handle.path))
                 },
-                Err(error) => Ok(result_err(io_error("Other", &error.to_string()))),
+                Err(error) => result_err(io_error("Other", &error.to_string())),
             }
         },
     }
 }
 
-fn read_chunk(handle: &FileHandle, max: usize) -> Result<Value, Error> {
+fn read_chunk(handle: &FileHandle, max: usize) -> Value {
     let mut inner = handle.inner.lock();
     match inner.as_mut() {
-        None | Some(FileInner::Write(_)) => Ok(result_err(io_error("InvalidHandle", ""))),
+        None => result_err(io_error("InvalidHandle", "")),
+        Some(FileInner::Write(_)) => result_err(io_error("NotReadable", "")),
         Some(FileInner::Read(reader)) => {
             // 按块上限读取而非预分配: 请求块再大, 实际内存只随文件内容增长.
             let limit = u64::try_from(max).unwrap_or(u64::MAX);
             let mut buffer = Vec::new();
             match reader.take(limit).read_to_end(&mut buffer) {
-                Ok(0) => Ok(result_ok(option_none())),
+                Ok(0) => result_ok(option_none()),
                 Ok(_) => {
                     let bytes = crate::value::List::u8s(buffer);
-                    Ok(result_ok(option_some(Value::List(Arc::new(bytes)))))
+                    result_ok(option_some(Value::List(Arc::new(bytes))))
                 },
-                Err(error) => Ok(result_err(io_error("Other", &error.to_string()))),
+                Err(error) => result_err(io_error("Other", &error.to_string())),
             }
         },
     }
 }
 
-fn write_string(handle: &FileHandle, text: &str) -> Result<Value, Error> {
+fn write_string(handle: &FileHandle, text: &str) -> Value {
     write_all(handle, text.as_bytes())
 }
 
-fn write_bytes(handle: &FileHandle, bytes: &[u8]) -> Result<Value, Error> {
+fn write_bytes(handle: &FileHandle, bytes: &[u8]) -> Value {
     write_all(handle, bytes)
 }
 
-fn write_all(handle: &FileHandle, bytes: &[u8]) -> Result<Value, Error> {
+fn write_all(handle: &FileHandle, bytes: &[u8]) -> Value {
     let mut inner = handle.inner.lock();
     match inner.as_mut() {
-        None | Some(FileInner::Read(_)) => Ok(result_err(io_error("InvalidHandle", ""))),
+        None => result_err(io_error("InvalidHandle", "")),
+        Some(FileInner::Read(_)) => result_err(io_error("NotWritable", "")),
         Some(FileInner::Write(writer)) => match writer.write_all(bytes) {
-            Ok(()) => Ok(result_ok(Value::Nil)),
-            Err(error) => Ok(result_err(io_error("Other", &error.to_string()))),
+            Ok(()) => result_ok(Value::Nil),
+            Err(error) => result_err(io_error("Other", &error.to_string())),
         },
     }
 }
@@ -716,7 +729,13 @@ fn io_error_for_pair(error: &std::io::Error, from: &str, to: &str) -> Value {
 }
 
 /// 无载荷的 `IOError` 变体; 这些变体没有路径或消息可报.
-const IO_ERROR_PLAIN: &[&str] = &["InvalidHandle", "NotATerminal", "Interrupted"];
+const IO_ERROR_PLAIN: &[&str] = &[
+    "InvalidHandle",
+    "NotReadable",
+    "NotWritable",
+    "NotATerminal",
+    "Interrupted",
+];
 
 fn io_error(variant: &str, field: &str) -> Value {
     let ty = crate::symbol::intern("IOError");
@@ -743,9 +762,24 @@ pub(crate) fn closed_file() -> Value {
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::{io_error, key_value};
+    use super::{
+        close, closed_file, io_error, key_value, open_read, open_write, read_line_from,
+        write_all,
+    };
     use crate::symbol::resolve;
     use crate::value::Value;
+
+    /// 取错误变体名; 输入必须是 `Result/Err[IOError]`.
+    fn error_variant(value: Value) -> String {
+        let Value::Data(result) = value else {
+            panic!("I/O 结果应为 Result");
+        };
+        assert_eq!(resolve(result.variant).as_ref(), "Err");
+        let Value::Data(error) = &result.fields[0] else {
+            panic!("错误负载应为 IOError");
+        };
+        resolve(error.variant).to_string()
+    }
 
     /// 取变体名与字段; 未建模的按键返回 None.
     fn mapped(code: KeyCode, modifiers: KeyModifiers) -> Option<(String, Vec<Value>)> {
@@ -786,11 +820,50 @@ mod tests {
 
     #[test]
     fn plain_io_errors_have_no_payload() {
-        for variant in ["NotATerminal", "Interrupted"] {
+        for variant in [
+            "InvalidHandle",
+            "NotReadable",
+            "NotWritable",
+            "NotATerminal",
+            "Interrupted",
+        ] {
             let Value::Data(data) = io_error(variant, "") else {
                 panic!("IOError 必须是 Data");
             };
             assert!(data.fields.is_empty(), "{variant} 不应携带载荷");
         }
+    }
+
+    #[test]
+    fn file_handle_direction_errors_are_distinct() {
+        let dir = crate::testutil::TempDir::new("ksl_io_direction_");
+        let path = dir.path().join("data.txt");
+        let path = path.to_str().expect("路径应为 UTF-8");
+
+        let Value::Data(written) = open_write(path, false) else {
+            panic!("Opening 应返回 Result");
+        };
+        let Value::File(writer) = &written.fields[0] else {
+            panic!("打开结果应为 File");
+        };
+        assert_eq!(error_variant(read_line_from(writer)), "NotReadable");
+        let _written = write_all(writer, b"x");
+        let _closed = close(writer);
+
+        let Value::Data(opened) = open_read(path) else {
+            panic!("Opening 应返回 Result");
+        };
+        let Value::File(reader) = &opened.fields[0] else {
+            panic!("打开结果应为 File");
+        };
+        assert_eq!(error_variant(write_all(reader, b"x")), "NotWritable");
+        let _read = read_line_from(reader);
+        let _closed = close(reader);
+
+        let Value::File(closed) = closed_file() else {
+            panic!("空句柄应为 File");
+        };
+        assert_eq!(error_variant(read_line_from(&closed)), "InvalidHandle");
+        assert_eq!(error_variant(write_all(&closed, b"x")), "InvalidHandle");
     }
 }

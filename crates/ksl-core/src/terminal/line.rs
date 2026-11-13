@@ -56,6 +56,11 @@ impl Line {
         self.cursor = next_boundary(&self.text, self.cursor);
     }
 
+    /// 在光标处插入文本但光标保持在插入点; 合并行时使用, 光标留在合并点.
+    pub fn insert_str_keep_cursor(&mut self, text: &str) {
+        self.text.insert_str(self.cursor, text);
+    }
+
     pub fn backspace(&mut self) -> bool {
         if self.cursor == 0 {
             return false;

@@ -1,7 +1,9 @@
-//! 当前行的视觉布局.
+//! 视觉行布局.
 //!
-//! 只处理一条逻辑行. 断行由本模块决定, 渲染时显式写出换行, 因此不依赖终端
-//! 的自动折行; 光标位置只由 `(行, 列)` 决定, 不涉及多行缓冲或 viewport.
+//! `layout` 只处理一条逻辑行: 断行由本模块决定, 渲染时显式写出换行,
+//! 因此不依赖终端的自动折行; 光标位置只由 `(行, 列)` 决定. 多行输入
+//! 由 `compose` 把多条逻辑行的布局拼为一份, 并在超出视口高度时保留
+//! 末尾窗口且保证焦点行可见.
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -107,6 +109,39 @@ fn push_segment(row: &mut Vec<Segment>, text: String, ink: Ink, width: usize) {
     row.push(Segment { text, ink, width });
 }
 
+/// 把多条逻辑行的布局拼为一份, 并对超出视口高度的情况保留末尾窗口.
+///
+/// `parts` 按缓冲行序排列, `focus` 是焦点行的下标; 超出 `max_rows` 时
+/// 丢弃开头多余的视觉行, 焦点行始终保留在窗口内. 光标列取焦点行的列.
+#[must_use]
+pub fn compose(parts: Vec<LineLayout>, focus: usize, max_rows: usize) -> LineLayout {
+    let mut rows = Vec::new();
+    let mut cursor_row = 0;
+    let mut cursor_col = 0;
+    for (index, part) in parts.into_iter().enumerate() {
+        if index == focus {
+            cursor_row = rows.len() + part.cursor_row;
+            cursor_col = part.cursor_col;
+        }
+        rows.extend(part.rows);
+    }
+    let max_rows = max_rows.max(1);
+    if rows.len() > max_rows {
+        let tail_top = rows.len() - max_rows;
+        let top = cursor_row.saturating_sub(max_rows - 1).min(tail_top);
+        // 头部锚定 (top 为 0 且焦点不在末尾窗口) 时需要裁掉末尾多余的行.
+        let mut window = rows.split_off(top);
+        window.truncate(max_rows);
+        rows = window;
+        cursor_row -= top;
+    }
+    LineLayout {
+        rows,
+        cursor_row,
+        cursor_col,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,5 +181,26 @@ mod tests {
     fn tab_expands_to_next_stop() {
         let layout = layout("1> ", "\t", 1, 80, plain);
         assert_eq!((layout.cursor_row, layout.cursor_col), (0, 4));
+    }
+
+    #[test]
+    fn compose_flattens_and_keeps_focus_visible() {
+        let first = layout("1> ", "ab", 2, 80, plain);
+        let second = layout("1| ", "cd", 1, 80, plain);
+        let joined = compose(vec![first, second], 1, 80);
+        assert_eq!(joined.rows.len(), 2);
+        assert_eq!((joined.cursor_row, joined.cursor_col), (1, 4));
+
+        // 超出视口时保留末尾窗口, 焦点在末尾则窗口对齐末尾.
+        let many: Vec<LineLayout> = (0..5).map(|_| layout("1| ", "x", 1, 80, plain)).collect();
+        let windowed = compose(many, 4, 3);
+        assert_eq!(windowed.rows.len(), 3);
+        assert_eq!(windowed.cursor_row, 2);
+
+        // 焦点在开头时窗口跟随焦点.
+        let many: Vec<LineLayout> = (0..5).map(|_| layout("1| ", "x", 1, 80, plain)).collect();
+        let windowed = compose(many, 0, 3);
+        assert_eq!(windowed.rows.len(), 3);
+        assert_eq!(windowed.cursor_row, 0);
     }
 }

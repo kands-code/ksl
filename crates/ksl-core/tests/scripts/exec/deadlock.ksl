@@ -1,0 +1,12 @@
+# @error E0419
+# 根 Actor 与子 Actor 都在等待时报告死锁.
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[worker, @Handler[[self : Pid[i64, i64]] : i64,
+      @Match[@Receive[0u, Option/None[]], {
+        (/Some[x], x),
+        (/None[], 0)
+      }]]],
+    @Let[p, @Spawn[worker]],
+    @Let[_joined, @Join[p]]
+  ]]

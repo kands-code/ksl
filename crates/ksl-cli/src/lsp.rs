@@ -286,33 +286,55 @@ fn symbols_for(path: &Path, text: &str) -> Vec<DocumentSymbol> {
         .collect()
 }
 
+/// 构造文档符号.
+///
+/// `lsp-types` 保留了协议中已废弃的 `deprecated` 字段, 且该结构没有
+/// `Default`; 废弃状态统一由 `tags` 表达, 这里固定填 None.
 #[allow(deprecated)]
+fn document_symbol(
+    name: String,
+    detail: &str,
+    kind: SymbolKind,
+    range: Range,
+    selection_range: Range,
+    children: Option<Vec<DocumentSymbol>>,
+) -> DocumentSymbol {
+    DocumentSymbol {
+        name,
+        detail: Some(detail.to_string()),
+        kind,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range,
+        children,
+    }
+}
+
 fn symbols_for_expr(sources: &Sources, expr: &Expr) -> Vec<DocumentSymbol> {
     match &expr.node {
         ExprKind::Special(Special::Data { name, variants }) => {
             let children = variants
                 .iter()
-                .map(|variant| DocumentSymbol {
-                    name: resolve(variant.name.node).to_string(),
-                    detail: Some("构造器".to_string()),
-                    kind: SymbolKind::CONSTRUCTOR,
-                    tags: None,
-                    deprecated: None,
-                    range: range(sources, variant.name.span),
-                    selection_range: range(sources, variant.name.span),
-                    children: None,
+                .map(|variant| {
+                    document_symbol(
+                        resolve(variant.name.node).to_string(),
+                        "构造器",
+                        SymbolKind::CONSTRUCTOR,
+                        range(sources, variant.name.span),
+                        range(sources, variant.name.span),
+                        None,
+                    )
                 })
                 .collect();
-            vec![DocumentSymbol {
-                name: resolve(name.node).to_string(),
-                detail: Some("Data".to_string()),
-                kind: SymbolKind::ENUM,
-                tags: None,
-                deprecated: None,
-                range: range(sources, expr.span),
-                selection_range: range(sources, name.span),
-                children: Some(children),
-            }]
+            vec![document_symbol(
+                resolve(name.node).to_string(),
+                "Data",
+                SymbolKind::ENUM,
+                range(sources, expr.span),
+                range(sources, name.span),
+                Some(children),
+            )]
         },
         ExprKind::Special(Special::Def(def)) => {
             vec![def_symbol(sources, def, expr.span)]
@@ -327,34 +349,29 @@ fn symbols_for_expr(sources: &Sources, expr: &Expr) -> Vec<DocumentSymbol> {
             .collect(),
         ExprKind::Special(Special::Let { target, .. }) => {
             target.name.as_ref().map_or_else(Vec::new, |name| {
-                vec![DocumentSymbol {
-                    name: resolve(name.node).to_string(),
-                    detail: Some("绑定".to_string()),
-                    kind: SymbolKind::VARIABLE,
-                    tags: None,
-                    deprecated: None,
-                    range: range(sources, expr.span),
-                    selection_range: range(sources, name.span),
-                    children: None,
-                }]
+                vec![document_symbol(
+                    resolve(name.node).to_string(),
+                    "绑定",
+                    SymbolKind::VARIABLE,
+                    range(sources, expr.span),
+                    range(sources, name.span),
+                    None,
+                )]
             })
         },
         _ => Vec::new(),
     }
 }
 
-#[allow(deprecated)]
 fn def_symbol(sources: &Sources, def: &ksl_core::ast::Def, span: Span) -> DocumentSymbol {
-    DocumentSymbol {
-        name: resolve(def.name.node).to_string(),
-        detail: Some("函数".to_string()),
-        kind: SymbolKind::FUNCTION,
-        tags: None,
-        deprecated: None,
-        range: range(sources, span),
-        selection_range: range(sources, def.name.span),
-        children: None,
-    }
+    document_symbol(
+        resolve(def.name.node).to_string(),
+        "函数",
+        SymbolKind::FUNCTION,
+        range(sources, span),
+        range(sources, def.name.span),
+        None,
+    )
 }
 
 fn diagnostics_for(

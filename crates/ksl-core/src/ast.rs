@@ -180,6 +180,14 @@ pub enum ExprKind {
         head: Head,
         args: Vec<Expr>,
     },
+    /// 后缀调用: 对任意表达式结果的应用 `expr[x, y]`, 可链式.
+    ///
+    /// 与 `Call` 的区别在于被调是任意表达式而非名字; 每对方括号都是
+    /// 完整调用, 不是柯里化. 只有函数类型的值可调用, 由检查器把关.
+    Apply {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
     Special(Special),
 }
 
@@ -220,13 +228,20 @@ pub enum Special {
         ret: TypeExpr,
         body: Box<Expr>,
     },
+    /// 模块入口 `@Main[[self : Pid[...]] : nil, 体]`; 程序根 Actor.
+    Main {
+        params: Vec<Param>,
+        ret: TypeExpr,
+        body: Box<Expr>,
+    },
     /// Handler 自循环 `@Continue[新状态...]`; 类型 Never, 仅限 Handler 体内.
     Continue {
         args: Vec<Expr>,
     },
-    /// 启动 Actor: `@Spawn[N, handler, 实参...]` 或 `@SpawnDetached[...]`.
+    /// 启动 Actor: `@Spawn[handler, 实参...]` 或 `@SpawnDetached[...]`.
+    ///
+    /// 信箱数由 Handler 的 Pid 类型推断, 不在调用点重复书写.
     Spawn {
-        count: Box<Expr>,
         handler: Box<Expr>,
         args: Vec<Expr>,
         detached: bool,
@@ -484,7 +499,7 @@ pub enum OptionOpKind {
 /// 绑定目标: `名字` 或 `名字 : 类型`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BindingTarget {
-    /// `_` 表示显式抛弃.
+    /// `_` 表示显式丢弃.
     pub name: Option<Spanned<Symbol>>,
     pub ty: Option<TypeExpr>,
 }

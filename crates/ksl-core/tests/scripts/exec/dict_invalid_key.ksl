@@ -1,2 +1,2 @@
-# @error E0333
+# @error E0332
 @Let[d : Dict[f64, i64], @Dict[]];

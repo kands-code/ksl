@@ -1,7 +1,7 @@
 //! 时间与日期.
 //!
 //! 时间值由 jiff 的 `Zoned` 承载: 绝对时刻加时区. 字段按自带时区解释;
-//! 日历算术 (年, 月, 周, 日) 保持本地墙上时间, 时长算术 (时, 分, 秒,
+//! 日历算术 (年, 月, 周, 日) 保持本地时间, 时长算术 (时, 分, 秒,
 //! 毫秒) 按精确时长. 时区数据由 jiff 提供: Unix 上优先读系统 tzdb,
 //! 其余情况回退到内嵌副本, 故各平台的命名时区都可用.
 //!
@@ -108,37 +108,37 @@ fn field(args: &[Value], what: &str, take: impl Fn(&Zoned) -> i64) -> Result<Val
     Ok(Value::I64(take(value)))
 }
 
-pub(crate) fn time_year(
+pub(crate) fn date_year(
     _: &[String],
     a: &[Value],
     _: Option<SourceSpan>,
 ) -> Result<Value, Error> {
-    field(a, "TimeYear 的实参", |d| i64::from(d.year()))
+    field(a, "DateYear 的实参", |d| i64::from(d.year()))
 }
 
-pub(crate) fn time_month(
+pub(crate) fn date_month(
     _: &[String],
     a: &[Value],
     _: Option<SourceSpan>,
 ) -> Result<Value, Error> {
-    field(a, "TimeMonth 的实参", |d| i64::from(d.month()))
+    field(a, "DateMonth 的实参", |d| i64::from(d.month()))
 }
 
-pub(crate) fn time_day(
+pub(crate) fn date_day(
     _: &[String],
     a: &[Value],
     _: Option<SourceSpan>,
 ) -> Result<Value, Error> {
-    field(a, "TimeDay 的实参", |d| i64::from(d.day()))
+    field(a, "DateDay 的实参", |d| i64::from(d.day()))
 }
 
 /// 星期几, 按 ISO 8601: 1 为周一, 7 为周日.
-pub(crate) fn time_weekday(
+pub(crate) fn date_weekday(
     _: &[String],
     a: &[Value],
     _: Option<SourceSpan>,
 ) -> Result<Value, Error> {
-    field(a, "TimeWeekday 的实参", |d| {
+    field(a, "DateWeekday 的实参", |d| {
         i64::from(d.weekday().to_monday_one_offset())
     })
 }
@@ -176,13 +176,13 @@ pub(crate) fn time_millisecond(
 }
 
 /// 换成指定时区, 时刻不变; 时区名不存在时返回 `TimeError/UnknownZone`.
-pub(crate) fn time_in_zone(
+pub(crate) fn date_time_in_zone(
     _: &[String],
     a: &[Value],
     _: Option<SourceSpan>,
 ) -> Result<Value, Error> {
-    let value = date_time(a, 0, "TimeInZone 的实参")?;
-    let name = string_arg(a, 1, "TimeInZone 的时区名")?;
+    let value = date_time(a, 0, "DateTimeInZone 的实参")?;
+    let name = string_arg(a, 1, "DateTimeInZone 的时区名")?;
     match TimeZone::get(name) {
         Ok(zone) => Ok(result_ok(date_time_value(value.with_time_zone(zone)))),
         Err(_) => Ok(result_err(time_error("UnknownZone", name))),
@@ -215,8 +215,8 @@ pub(crate) fn time_zone_offset_minutes(
 
 /// 按字段构造时间, 时区取宿主本地时区.
 ///
-/// 夏令时空洞按兼容策略前移, 重叠取较早的偏移, 与 cron 的惯例一致.
-pub(crate) fn time_from_parts(
+/// 夏令时空洞按兼容策略前移, 重叠取较早的偏移.
+pub(crate) fn date_time_from_parts(
     _: &[String],
     a: &[Value],
     _: Option<SourceSpan>,
@@ -224,7 +224,7 @@ pub(crate) fn time_from_parts(
     let fields = ["年", "月", "日", "时", "分", "秒"];
     let mut parts = [0_i64; 6];
     for (index, name) in fields.iter().enumerate() {
-        parts[index] = int_arg(a, index, &format!("TimeFromParts 的{name}"))?;
+        parts[index] = int_arg(a, index, &format!("DateTimeFromParts 的{name}"))?;
     }
     let (year, month, day, hour, minute, second) = (
         i16::try_from(parts[0]),
@@ -254,7 +254,7 @@ pub(crate) fn time_from_parts(
 /// 解析时间字符串.
 ///
 /// 带偏移或 `[时区]` 后缀的按该时区解释; 不带时区的按宿主本地时区解释.
-/// 输出与 `TimeToString` 的形态可互相往返.
+/// 输出与 `DateTimeToString` 的形态可互相往返.
 pub(crate) fn parse_date_time(
     _: &[String],
     a: &[Value],
@@ -274,12 +274,12 @@ pub(crate) fn parse_date_time(
 }
 
 /// 按 ISO 8601 扩展格式输出, 与 `ParseDateTime` 可互相往返.
-pub(crate) fn time_to_string(
+pub(crate) fn date_time_to_string(
     _: &[String],
     a: &[Value],
     _: Option<SourceSpan>,
 ) -> Result<Value, Error> {
-    let value = date_time(a, 0, "TimeToString 的实参")?;
+    let value = date_time(a, 0, "DateTimeToString 的实参")?;
     Ok(Value::Str(Arc::from(value.to_string())))
 }
 
@@ -305,14 +305,31 @@ pub(crate) fn epoch_millis_to_date_time(
     Ok(date_time_value(timestamp.to_zoned(TimeZone::UTC)))
 }
 
+/// 比较两个 `DateTime` 的绝对时刻; 显示时区不参与判断.
+fn compare_date_time(
+    a: &[Value],
+    name: &str,
+    compare: impl Fn(&Zoned, &Zoned) -> bool,
+) -> Result<Value, Error> {
+    let left = date_time(a, 0, &format!("{name} 的第一个实参"))?;
+    let right = date_time(a, 1, &format!("{name} 的第二个实参"))?;
+    Ok(Value::Bool(compare(left, right)))
+}
+
 pub(crate) fn less_date_time(
     _: &[String],
     a: &[Value],
     _: Option<SourceSpan>,
 ) -> Result<Value, Error> {
-    let left = date_time(a, 0, "LessDateTime 的第一个实参")?;
-    let right = date_time(a, 1, "LessDateTime 的第二个实参")?;
-    Ok(Value::Bool(left < right))
+    compare_date_time(a, "LessDateTime", |left, right| left < right)
+}
+
+pub(crate) fn less_or_equal_date_time(
+    _: &[String],
+    a: &[Value],
+    _: Option<SourceSpan>,
+) -> Result<Value, Error> {
+    compare_date_time(a, "LessOrEqualDateTime", |left, right| left <= right)
 }
 
 pub(crate) fn equal_date_time(
@@ -320,14 +337,28 @@ pub(crate) fn equal_date_time(
     a: &[Value],
     _: Option<SourceSpan>,
 ) -> Result<Value, Error> {
-    let left = date_time(a, 0, "EqualDateTime 的第一个实参")?;
-    let right = date_time(a, 1, "EqualDateTime 的第二个实参")?;
-    Ok(Value::Bool(left == right))
+    compare_date_time(a, "EqualDateTime", |left, right| left == right)
+}
+
+pub(crate) fn greater_date_time(
+    _: &[String],
+    a: &[Value],
+    _: Option<SourceSpan>,
+) -> Result<Value, Error> {
+    compare_date_time(a, "GreaterDateTime", |left, right| left > right)
+}
+
+pub(crate) fn greater_or_equal_date_time(
+    _: &[String],
+    a: &[Value],
+    _: Option<SourceSpan>,
+) -> Result<Value, Error> {
+    compare_date_time(a, "GreaterOrEqualDateTime", |left, right| left >= right)
 }
 
 /// 在时间上增减一个单位; `sign` 为 1 表示加, -1 表示减.
 ///
-/// 年, 月, 周, 日按日历解释, 保持本地墙上时间; 时, 分, 秒, 毫秒按精确时长.
+/// 年, 月, 周, 日按日历解释, 保持本地时间; 时, 分, 秒, 毫秒按精确时长.
 fn shift(
     args: &[Value],
     what: &str,

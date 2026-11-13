@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 
 use super::display::is_printable;
 use super::reserved;
-use super::types::{HandlerType, PidType, Type};
+use super::types::Type;
 use crate::ast::{ExprKind, Spanned, Special, TypeExpr};
 use crate::error::{ErrorKind, KslError};
 use crate::fmtstr;
@@ -41,8 +41,11 @@ impl Default for DataTable {
         io_variants.insert(intern("NotADirectory"), vec![Type::Str]);
         io_variants.insert(intern("IsADirectory"), vec![Type::Str]);
         io_variants.insert(intern("DirectoryNotEmpty"), vec![Type::Str]);
-        // 句柄已关闭或读写方向不符; 无路径可报, 故不带载荷.
+        // 句柄已关闭或无效; 无路径可报, 故不带载荷.
         io_variants.insert(intern("InvalidHandle"), Vec::new());
+        // 句柄方向不符; 与 InvalidHandle 一样没有路径或消息可报.
+        io_variants.insert(intern("NotReadable"), Vec::new());
+        io_variants.insert(intern("NotWritable"), Vec::new());
         // 标准输入不是终端; 与 InvalidHandle 一样没有路径或消息可报.
         io_variants.insert(intern("NotATerminal"), Vec::new());
         // 用户中断当前行读取; 没有路径或消息可报.
@@ -52,6 +55,12 @@ impl Default for DataTable {
             intern("IOError"),
             DataInfo {
                 variants: io_variants,
+            },
+        );
+        types.insert(
+            intern("SocketError"),
+            DataInfo {
+                variants: socket_error_variants(),
             },
         );
         let mut time_variants = IndexMap::new();
@@ -95,8 +104,45 @@ impl Default for DataTable {
                 variants: key_variants,
             },
         );
+        // 标准 IO 服务的请求协议; 回复句柄在运行时信封中, 不属于请求值.
+        let mut io_request_variants = IndexMap::new();
+        io_request_variants.insert(intern("Print"), vec![Type::Str]);
+        io_request_variants.insert(intern("PrintRaw"), vec![Type::Str]);
+        io_request_variants.insert(intern("PrintError"), vec![Type::Str]);
+        io_request_variants.insert(intern("ReadLine"), vec![Type::Str]);
+        io_request_variants.insert(intern("ReadKey"), Vec::new());
+        types.insert(
+            intern("IORequest"),
+            DataInfo {
+                variants: io_request_variants,
+            },
+        );
         Self { types }
     }
+}
+
+/// 套接字操作的错误变体; 与文件 I/O 分开, 便于模式匹配与诊断.
+fn socket_error_variants() -> IndexMap<Symbol, Vec<Type>> {
+    let mut variants = IndexMap::new();
+    for name in [
+        "TimedOut",
+        "ConnectionRefused",
+        "ConnectionReset",
+        "ConnectionClosed",
+        "Closed",
+        "AddrInUse",
+        "AddrNotAvailable",
+        "PermissionDenied",
+        "InvalidUtf8",
+        "LineTooLong",
+        "TooLarge",
+        "UnexpectedEof",
+    ] {
+        variants.insert(intern(name), Vec::new());
+    }
+    variants.insert(intern("InvalidArgument"), vec![Type::Str]);
+    variants.insert(intern("Other"), vec![Type::Str]);
+    variants
 }
 
 /// 先收集并校验全部 `@Data` 声明; 字段类型在名字表齐全后统一解析.
@@ -188,117 +234,21 @@ pub(super) fn ensure_dict_key(ty: &Type, span: Span) -> Result<(), KslError> {
 }
 
 /// 把类型表达式解析为具体类型; 名字来源为内置类型或已声明的 Data 类型名集合.
-#[allow(clippy::too_many_lines)]
 pub(super) fn resolve_type(
     ty: &TypeExpr,
     is_data: &impl Fn(Symbol) -> bool,
 ) -> Result<Type, KslError> {
     match ty {
-        TypeExpr::Named(name) => {
-            let kw = keywords();
-            let node = name.node;
-            if node == kw.i64_ {
-                Ok(Type::I64)
-            } else if node == kw.u8_ {
-                Ok(Type::U8)
-            } else if node == kw.u64_ {
-                Ok(Type::U64)
-            } else if node == kw.f64_ {
-                Ok(Type::F64)
-            } else if node == kw.char_ {
-                Ok(Type::Char)
-            } else if node == kw.bool_ {
-                Ok(Type::Bool)
-            } else if node == kw.string_ {
-                Ok(Type::Str)
-            } else if node == kw.nil_ {
-                Ok(Type::Nil)
-            } else if node == intern("File") {
-                Ok(Type::File)
-            } else if node == intern("DateTime") {
-                Ok(Type::DateTime)
-            } else if is_data(node) {
-                Ok(Type::Data(node))
-            } else {
-                Err(KslError::with_subject(
-                    ErrorKind::UnknownType,
-                    name.span,
-                    resolve(node).to_string(),
-                ))
-            }
-        },
+        TypeExpr::Named(name) => resolve_app(name, Vec::new(), is_data),
         TypeExpr::Generic { name, args } => {
-            let resolved_args = args
+            if args.is_empty() {
+                return Err(unknown_type(name));
+            }
+            let args = args
                 .iter()
                 .map(|arg| resolve_type(arg, is_data))
                 .collect::<Result<Vec<_>, _>>()?;
-            let kw = keywords();
-            let node = name.node;
-            if node == kw.pid_ {
-                // 最后一个参数是返回类型, 前面是各信箱的消息类型.
-                if !(2..=17).contains(&resolved_args.len()) {
-                    return Err(KslError::new(
-                        ErrorKind::InvalidPidType {
-                            mailboxes: resolved_args.len().saturating_sub(1),
-                        },
-                        name.span,
-                    ));
-                }
-                let mut args = resolved_args;
-                let ret = args.pop().expect("Pid 至少两个参数");
-                return Ok(Type::PidT(Box::new(PidType {
-                    mailboxes: args,
-                    ret: Box::new(ret),
-                })));
-            }
-            if node == kw.handler_ {
-                let mut args = resolved_args.into_iter();
-                let Some(pid) = args.next() else {
-                    return Err(KslError::new(ErrorKind::InvalidHandlerType, name.span));
-                };
-                if !matches!(pid, Type::PidT(_)) {
-                    return Err(KslError::new(ErrorKind::InvalidHandlerType, name.span));
-                }
-                return Ok(Type::HandlerT(Box::new(HandlerType {
-                    pid: Box::new(pid),
-                    args: args.collect(),
-                })));
-            }
-            if node == intern("Dict") {
-                let [key, value] = resolved_args.as_slice() else {
-                    return Err(KslError::new(
-                        ErrorKind::InvalidDictKey { found: Type::Nil },
-                        name.span,
-                    ));
-                };
-                ensure_dict_key(key, name.span)?;
-                return Ok(Type::Dict(Box::new(key.clone()), Box::new(value.clone())));
-            }
-            if node == intern("Set") {
-                let [inner] = resolved_args.as_slice() else {
-                    return Err(KslError::new(
-                        ErrorKind::InvalidDictKey { found: Type::Nil },
-                        name.span,
-                    ));
-                };
-                ensure_dict_key(inner, name.span)?;
-                return Ok(Type::Set(Box::new(inner.clone())));
-            }
-            match resolved_args.as_slice() {
-                [inner] if node == kw.list_ => Ok(Type::List(Box::new(inner.clone()))),
-                [a, b] if node == kw.pair_ => {
-                    Ok(Type::Pair(Box::new(a.clone()), Box::new(b.clone())))
-                },
-                [inner] if node == kw.option_ => Ok(Type::OptionT(Box::new(inner.clone()))),
-                [ok, err] if node == kw.result_ => {
-                    Ok(Type::ResultT(Box::new(ok.clone()), Box::new(err.clone())))
-                },
-                _ => Err(KslError::with_subject(
-                    ErrorKind::UnknownType,
-                    name.span,
-                    resolve(node).to_string(),
-                )),
-            }
+            resolve_app(name, args, is_data)
         },
         TypeExpr::Fn { params, ret, .. } => {
             let params = params
@@ -309,6 +259,111 @@ pub(super) fn resolve_type(
             Ok(Type::Fn(params, Box::new(ret)))
         },
     }
+}
+
+/// 解析一次类型应用: 具名类型视为零参数应用.
+fn resolve_app(
+    name: &Spanned<Symbol>,
+    args: Vec<Type>,
+    is_data: &impl Fn(Symbol) -> bool,
+) -> Result<Type, KslError> {
+    let kw = keywords();
+    let node = name.node;
+    if args.is_empty() {
+        let ty = if node == kw.i64_ {
+            Type::I64
+        } else if node == kw.u8_ {
+            Type::U8
+        } else if node == kw.u64_ {
+            Type::U64
+        } else if node == kw.f64_ {
+            Type::F64
+        } else if node == kw.char_ {
+            Type::Char
+        } else if node == kw.bool_ {
+            Type::Bool
+        } else if node == kw.string_ {
+            Type::Str
+        } else if node == kw.nil_ {
+            Type::Nil
+        } else if node == intern("File") {
+            Type::file()
+        } else if node == intern("DateTime") {
+            Type::date_time()
+        } else if node == intern("Socket") {
+            Type::socket()
+        } else if node == intern("TcpListener") {
+            Type::tcp_listener()
+        } else if is_data(node) {
+            Type::data(node)
+        } else {
+            return Err(unknown_type(name));
+        };
+        return Ok(ty);
+    }
+    if is_data(node) {
+        // 用户 Data 不带类型参数, 泛型留待后续设计.
+        return Err(unknown_type(name));
+    }
+    if node == kw.pid_ {
+        // 最后一个参数是返回类型, 前面是各信箱的消息类型.
+        if !(2..=17).contains(&args.len()) {
+            return Err(KslError::new(
+                ErrorKind::InvalidPidType {
+                    mailboxes: args.len().saturating_sub(1),
+                },
+                name.span,
+            ));
+        }
+        let mut args = args;
+        let ret = args.pop().expect("Pid 至少两个参数");
+        return Ok(Type::pid(args, ret));
+    }
+    if node == kw.handler_ {
+        let mut args = args.into_iter();
+        let Some(pid) = args.next() else {
+            return Err(KslError::new(ErrorKind::InvalidHandlerType, name.span));
+        };
+        if !pid.is_pid() {
+            return Err(KslError::new(ErrorKind::InvalidHandlerType, name.span));
+        }
+        return Ok(Type::handler(pid, args.collect()));
+    }
+    if node == intern("Dict") {
+        let [key, value] = args.as_slice() else {
+            return Err(KslError::new(
+                ErrorKind::InvalidDictKey { found: Type::Nil },
+                name.span,
+            ));
+        };
+        ensure_dict_key(key, name.span)?;
+        return Ok(Type::dict(key.clone(), value.clone()));
+    }
+    if node == intern("Set") {
+        let [inner] = args.as_slice() else {
+            return Err(KslError::new(
+                ErrorKind::InvalidDictKey { found: Type::Nil },
+                name.span,
+            ));
+        };
+        ensure_dict_key(inner, name.span)?;
+        return Ok(Type::set(inner.clone()));
+    }
+    match args.as_slice() {
+        [inner] if node == kw.list_ => Ok(Type::list(inner.clone())),
+        [a, b] if node == kw.pair_ => Ok(Type::pair(a.clone(), b.clone())),
+        [inner] if node == kw.option_ => Ok(Type::option(inner.clone())),
+        [ok, err] if node == kw.result_ => Ok(Type::result(ok.clone(), err.clone())),
+        _ => Err(unknown_type(name)),
+    }
+}
+
+fn unknown_type(name: &Spanned<Symbol>) -> KslError {
+    KslError::with_subject(
+        ErrorKind::UnknownType,
+        name.span,
+        resolve(name.node).to_string(),
+    )
 }
 
 /// 校验名字可绑定: 内置名一律保留.

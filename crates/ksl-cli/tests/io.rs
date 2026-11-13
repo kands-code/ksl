@@ -13,12 +13,13 @@ fn temp_root() -> TempDir {
 #[test]
 fn read_line_handles_input_and_eof() {
     let read = r#"
-        @Match[ReadLine[""], {
-            (/Ok[result], @Match[result, {
-                (/Some[line], @Block[@Let[p, Print[line]], line]),
-                (/None[], @Block[@Let[p, Print["eof"]], "eof"])
-            }]),
-            (/Err[e], "err")
+        @Let[_p, Print["before"]];
+        @Match[ReadLine["> "], {
+          (/Ok[result], @Match[result, {
+            (/Some[line], @Block[@Let[p, Print[line]], line]),
+            (/None[], @Block[@Let[p, Print["eof"]], "eof"])
+          }]),
+          (/Err[e], "err")
         }]
     "#;
     Command::cargo_bin("ksl")
@@ -27,7 +28,35 @@ fn read_line_handles_input_and_eof() {
         .write_stdin("hello\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("hello"));
+        // 排队的输出必须在读取提示之前写出.
+        .stdout(predicate::str::contains("before\n> hello"));
+    Command::cargo_bin("ksl")
+        .expect("命令行应可启动")
+        .args(["run", "--code", read])
+        .write_stdin("")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("eof"));
+}
+
+#[test]
+fn read_line_plain_handles_input_and_eof() {
+    let read = r#"
+        @Match[ReadLinePlain["> "], {
+          (/Ok[result], @Match[result, {
+            (/Some[line], @Block[@Let[p, Print[line]], line]),
+            (/None[], @Block[@Let[p, Print["eof"]], "eof"])
+          }]),
+          (/Err[e], "err")
+        }]
+    "#;
+    Command::cargo_bin("ksl")
+        .expect("命令行应可启动")
+        .args(["run", "--code", read])
+        .write_stdin("hello\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("> hello\n"));
     Command::cargo_bin("ksl")
         .expect("命令行应可启动")
         .args(["run", "--code", read])
@@ -45,16 +74,16 @@ fn binary_file_round_trip() {
     let code = format!(
         r#"
         @Let[_w, @Match[WriteFileBytes["{path}", {{65u, 66u, 67u}}], {{
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }}]];
         @Let[bytes, @Match[ReadFileBytes["{path}"], {{
-            (/Ok[b], b),
-            (/Err[e], {{}})
+          (/Ok[b], b),
+          (/Err[e], {{}})
         }}]];
         @Let[text, @Match[ReadFile["{path}"], {{
-            (/Ok[s], s),
-            (/Err[e], "")
+          (/Ok[s], s),
+          (/Err[e], "")
         }}]];
         @Let[n, @ListLength[bytes]];
         Print[f"{{n}} {{text}}\\n"]
@@ -73,66 +102,66 @@ fn append_copy_rename_and_current_directory() {
     let root = temp_root();
     let code = r#"
         @Let[_w, @Match[WriteFile["a.txt", "A"], {
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }]];
         @Let[_a, @Match[AppendFile["a.txt", "B"], {
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }]];
         @Let[text, @Match[ReadFile["a.txt"], {
-            (/Ok[s], s),
-            (/Err[e], "")
+          (/Ok[s], s),
+          (/Err[e], "")
         }]];
         @Let[_wb, @Match[WriteFileBytes["b.bin", {65u}], {
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }]];
         @Let[_ab, @Match[AppendFileBytes["b.bin", {66u, 67u}], {
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }]];
         @Let[bytes, @Match[ReadFileBytes["b.bin"], {
-            (/Ok[b], b),
-            (/Err[e], {})
+          (/Ok[b], b),
+          (/Err[e], {})
         }]];
         @Let[n, @ListLength[bytes]];
         @Let[_ac, @Match[AppendFile["created.txt", "C"], {
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }]];
         @Let[created, @Match[ReadFile["created.txt"], {
-            (/Ok[s], s),
-            (/Err[e], "")
+          (/Ok[s], s),
+          (/Err[e], "")
         }]];
         @Let[_cp, @Match[CopyFile["a.txt", "c.txt"], {
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }]];
         @Let[copied, @Match[ReadFile["c.txt"], {
-            (/Ok[s], s),
-            (/Err[e], "")
+          (/Ok[s], s),
+          (/Err[e], "")
         }]];
         @Let[_mv, @Match[RenamePath["c.txt", "d.txt"], {
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }]];
         @Let[old_exists, IsPathExists["c.txt"]];
         @Let[new_text, @Match[ReadFile["d.txt"], {
-            (/Ok[s], s),
-            (/Err[e], "")
+          (/Ok[s], s),
+          (/Err[e], "")
         }]];
         @Let[pwd, @Match[GetCurrentDirectory[], {
-            (/Ok[s], s),
-            (/Err[e], "")
+          (/Ok[s], s),
+          (/Err[e], "")
         }]];
         @Let[pwd_ok, IsPathExists[JoinPath[pwd, "a.txt"]]];
         @Let[missing_rename, @Match[RenamePath["missing.txt", "x.txt"], {
-            (/Ok[v], "ok"),
-            (/Err[e], @Match[e, {
-                (IOError/NotFound[path], "notfound"),
-                (_, "other")
-            }])
+          (/Ok[v], "ok"),
+          (/Err[e], @Match[e, {
+            (IOError/NotFound[path], "notfound"),
+            (_, "other")
+          }])
         }]];
         Print[f"{text} {created} {copied} {new_text}\n"];
         Print[f"{n} {old_exists} {pwd_ok} {missing_rename}\n"]
@@ -157,17 +186,17 @@ fn directory_operations_and_predicates() {
     let code = format!(
         r#"
         @Let[_d, @Match[CreateDirectoryAll["{dir}"], {{
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }}]];
         @Let[file, JoinPath["{dir}", "a.bin"]];
         @Let[_w, @Match[WriteFileBytes[file, {{1u}}], {{
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }}]];
         @Let[names, @Match[ListDirectory["{dir}"], {{
-            (/Ok[xs], xs),
-            (/Err[e], {{}})
+          (/Ok[xs], xs),
+          (/Err[e], {{}})
         }}]];
         @Let[is_dir, IsDirectory["{dir}"]];
         @Let[not_file, IsFile["{dir}"]];
@@ -177,13 +206,13 @@ fn directory_operations_and_predicates() {
         @Let[missing_dir, IsDirectory["{missing}"]];
         @Let[n, @ListLength[names]];
         @Let[_rf, @Match[RemoveFile[file], {{
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }}]];
         @Let[file_gone, IsPathExists[file]];
         @Let[_rd, @Match[RemoveDirectory["{dir}"], {{
-            (/Ok[v], v),
-            (/Err[e], nil)
+          (/Ok[v], v),
+          (/Err[e], nil)
         }}]];
         @Let[dir_gone, IsPathExists["{dir}"]];
         Print[f"{{n}} {{is_dir}} {{not_file}} {{is_file}}\\n"];

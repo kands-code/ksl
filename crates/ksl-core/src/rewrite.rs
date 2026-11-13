@@ -63,6 +63,12 @@ fn rewrite_expr(expr: &mut Expr, types: &TypeNames) {
                 rewrite_expr(arg, types);
             }
         },
+        ExprKind::Apply { callee, args } => {
+            rewrite_expr(callee, types);
+            for arg in args {
+                rewrite_expr(arg, types);
+            }
+        },
         ExprKind::Special(special) => rewrite_special(special, types),
         _ => {},
     }
@@ -86,7 +92,9 @@ fn rewrite_special(special: &mut Special, types: &TypeNames) {
             rewrite_expr(then, types);
             rewrite_expr(els, types);
         },
-        Special::Fn { params, ret, body } | Special::Handler { params, ret, body } => {
+        Special::Fn { params, ret, body }
+        | Special::Handler { params, ret, body }
+        | Special::Main { params, ret, body } => {
             rewrite_params(params, types);
             rewrite_type_expr(ret, types);
             rewrite_expr(body, types);
@@ -115,13 +123,7 @@ fn rewrite_special(special: &mut Special, types: &TypeNames) {
                 rewrite_expr(arg, types);
             }
         },
-        Special::Spawn {
-            count,
-            handler,
-            args,
-            ..
-        } => {
-            rewrite_expr(count, types);
+        Special::Spawn { handler, args, .. } => {
             rewrite_expr(handler, types);
             for arg in args {
                 rewrite_expr(arg, types);

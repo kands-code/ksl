@@ -9,7 +9,7 @@
 @Let[supervisor, @Handler[
   [self : Pid[i64, Pair[u64, ExitReason], i64], attempt : i64] : i64,
   @Block[
-    @Let[child, @Spawn[1u, worker, SubI64[attempt, 1]]],
+    @Let[child, @Spawn[worker, SubI64[attempt, 1]]],
     @Let[mon, @Monitor[child]],
     @Match[mon, {
       (/Some[id], @Match[@Receive[1u, Option/None[]], {
@@ -25,8 +25,8 @@
   ]]];
 
 @Block[
-  @Let[p, @Spawn[2u, supervisor, 3]],
-  @Let[detached, @SpawnDetached[1u, worker, 0]],
+  @Let[p, @Spawn[supervisor, 3]],
+  @Let[detached, @SpawnDetached[worker, 0]],
   @Let[s, @Send[p, 0u, 1]],
   @Let[k, @Kill[detached]],
   @Let[serial, @PidSerial[p]],

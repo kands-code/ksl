@@ -79,10 +79,26 @@ fn run_example_with_input(
 
 #[test]
 fn examples_print_expected_ir_shapes() {
-    example_ir("cps", &["handler $handler0", "receive 0", "prim @Spawn"]);
+    example_ir("cps", &["handler $handler", "receive 0", "prim @Spawn"]);
     example_ir(
         "linear",
-        &["handler $handler0", "b0", "receive 0", "prim @Spawn"],
+        &["handler $handler", "b0", "receive 0", "prim @Spawn"],
+    );
+}
+
+#[test]
+fn examples_type_check_modules() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let path = root.join("examples/06_p2p_chat/main.ksl");
+    let output = Command::new(env!("CARGO_BIN_EXE_ksl"))
+        .arg("check")
+        .arg(&path)
+        .output()
+        .expect("检查命令应可启动");
+    assert!(
+        output.status.success(),
+        "示例类型检查失败: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
