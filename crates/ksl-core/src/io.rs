@@ -114,6 +114,18 @@ pub fn take_stdout_wrote() -> bool {
     wrote
 }
 
+/// 计入终端行规程对输入的回显.
+///
+/// 按行读取时输入与回车由终端直接回显, 不经过 `write_stdout`; 跟踪期间
+/// 需要一并计入, 否则提示符后的换行会被漏掉. `newline` 表示回显以换行
+/// 结束; 调用方保证回显非空.
+pub(super) fn track_terminal_echo(newline: bool) {
+    if STDOUT_TRACKING.load(Ordering::Relaxed) {
+        STDOUT_WROTE.store(true, Ordering::Relaxed);
+        STDOUT_AT_LINE_START.store(newline, Ordering::Relaxed);
+    }
+}
+
 /// 开启标准错误的写出跟踪.
 pub fn begin_stderr_tracking() {
     let _ = flush_output();
@@ -173,6 +185,13 @@ impl Task {
 /// 提交 I/O 任务; 完成回调把结果交给调度器.
 ///
 /// `cancel` 用于终端读取与网络操作; 文件操作无法中断, 完成后结果由调度器丢弃.
+/// 配置阻塞 I/O 工作线程数; 供命令行 `--io-workers` 使用.
+///
+/// 只在线程池首次提交任务前生效; 传入值至少为 1.
+pub fn set_io_workers(count: usize) {
+    pool::configure(count);
+}
+
 pub(crate) fn submit_task(
     task: Task,
     op_id: u64,
@@ -654,14 +673,14 @@ fn file_value(inner: FileInner, path: &str) -> Value {
 
 fn string_arg(args: &[Value], index: usize, what: &str) -> Result<Arc<str>, Error> {
     let Some(Value::Str(text)) = args.get(index) else {
-        return Err(Error::internal(format!("{what}不是字符串")));
+        return Err(Error::internal(format!("{what} 不是字符串")));
     };
     Ok(Arc::clone(text))
 }
 
 fn file_arg(args: &[Value], index: usize, what: &str) -> Result<Arc<FileHandle>, Error> {
     let Some(Value::File(handle)) = args.get(index) else {
-        return Err(Error::internal(format!("{what}不是 File")));
+        return Err(Error::internal(format!("{what} 不是 File")));
     };
     Ok(Arc::clone(handle))
 }

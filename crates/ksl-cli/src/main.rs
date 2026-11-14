@@ -44,8 +44,22 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             },
         },
-        cli::Action::Run { source, args } => cmd_run(&source, args),
-        cli::Action::Repl { file, code } => repl::run(file.as_deref(), code.as_deref()),
+        cli::Action::Run {
+            source,
+            args,
+            io_workers,
+        } => {
+            apply_io_workers(io_workers);
+            cmd_run(&source, args)
+        },
+        cli::Action::Repl {
+            file,
+            code,
+            io_workers,
+        } => {
+            apply_io_workers(io_workers);
+            repl::run(file.as_deref(), code.as_deref())
+        },
         cli::Action::Help(topic) => {
             out!("{}", cli::help(topic));
             ExitCode::SUCCESS
@@ -193,6 +207,13 @@ fn run_code(code: &str, args: Vec<String>) -> ExitCode {
     match host.run_code("<命令行>", code) {
         Ok(outcome) => finish_host(&mut host, outcome),
         Err(err) => report_error(host.sources(), &err),
+    }
+}
+
+/// 应用命令行给定的 I/O 工作线程数; 必须在首次 I/O 提交之前调用.
+fn apply_io_workers(io_workers: Option<usize>) {
+    if let Some(count) = io_workers {
+        ksl_core::io::set_io_workers(count);
     }
 }
 

@@ -108,7 +108,7 @@ pub enum ErrorKind {
     InvalidHandlerType,
     /// @Handler 的首参数不是 Pid.
     InvalidHandlerParam,
-    /// @Continue 等原语出现在 Handler 体外.
+    /// Actor 原语出现在 @Handler 或 @Main 体外.
     ActorPrimitiveOutsideHandler,
     /// 信箱数或信箱索引不是非负整数字面量.
     LiteralRequired,
@@ -291,14 +291,14 @@ impl ErrorKind {
             Self::ExportUnknown { .. } => "导出的名字未定义",
             Self::DuplicateImport { .. } => "本地导入名重复",
             Self::DuplicateExport { .. } => "导出名重复",
-            Self::MultipleExportStatements { .. } => "同一模块只能有一个导出声明",
+            Self::MultipleExportStatements { .. } => "同一模块只允许一个导出声明",
             Self::ExportOutsideModule => "导出声明只允许出现在模块中",
             Self::ExportPrivateType { .. } => "导出签名使用了未导出的类型",
             Self::ModuleAlreadyLoaded { .. } => "模块已加载",
             Self::InvalidMainParam => "@Main 必须只有一个 Pid self 参数",
             Self::InvalidMainReturn => "@Main 的返回类型必须是 nil",
             Self::MainOutsideModule => "@Main 只允许出现在模块中",
-            Self::MultipleMainStatements { .. } => "同一模块只能有一个 @Main",
+            Self::MultipleMainStatements { .. } => "同一模块只允许一个 @Main",
             Self::HaltInMain => "@Halt 不能出现在 @Main 体内",
             Self::ContinueInMain => "@Continue 不能出现在 @Main 体内",
             Self::UnprintableType { .. } => "该类型不可打印",

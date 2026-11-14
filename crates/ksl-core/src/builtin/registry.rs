@@ -315,7 +315,7 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
         ),
     ];
 
-    let socket_entries: [(&'static str, Type, crate::io::Builder); 14] = [
+    let socket_entries: [(&'static str, Type, crate::io::Builder); 16] = [
         (
             "TcpListen",
             Fun(vec![S, U64], Box::new(socket_result(Type::tcp_listener()))),
@@ -348,6 +348,16 @@ pub(super) static TABLE: LazyLock<Vec<Entry>> = LazyLock::new(|| {
             "SocketPeer",
             Fun(vec![Type::socket()], Box::new(S)),
             crate::io::net::socket_peer_task,
+        ),
+        (
+            "SocketIsClosed",
+            Fun(vec![Type::socket()], Box::new(B)),
+            crate::io::net::socket_is_closed_task,
+        ),
+        (
+            "SocketShutdownWrite",
+            Fun(vec![Type::socket()], Box::new(socket_result(N))),
+            crate::io::net::socket_shutdown_write_task,
         ),
         (
             "SocketRead",

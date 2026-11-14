@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Receiver;
 use parking_lot::Mutex;
 
-use super::shared::{SchedulerHandle, ShardEvent, Shared};
+use super::shared::{SchedulerHandle, ShardEvent, Shared, SpawnRequest};
 use super::timer_heap::TimerHeap;
 use crate::cps::exec::{Machine, RunOutcome, Wait};
 use crate::cps::gc::Marker;
@@ -47,6 +47,10 @@ pub(super) struct Shard {
     timers: TimerHeap<u64, TimerKind>,
     /// 指令预算; 测试可动态调小.
     slice_budget: Arc<AtomicUsize>,
+    /// `@Main` 根 Actor 的编号; 只在调度器线程上读写, 不进入共享状态.
+    root_actor: Option<u64>,
+    /// 根 Actor 的结局; 同上.
+    root_result: Option<Result<Value, Error>>,
 }
 
 impl Shard {
@@ -66,6 +70,8 @@ impl Shard {
             io_waiters: HashMap::new(),
             timers: TimerHeap::new(),
             slice_budget,
+            root_actor: None,
+            root_result: None,
         }
     }
 
@@ -90,10 +96,17 @@ impl Shard {
                 wait.trace(marker);
             }
         }
+        if let Some(Ok(value)) = &self.root_result {
+            marker.mark_value(value);
+        }
     }
 
     /// 处理事件队列中的全部待处理事件.
     pub(super) fn drain_events(&mut self) {
+        // 空转路径免锁: 标记为假时事件队列必为空.
+        if !self.handle.take_events_pending() {
+            return;
+        }
         let events = {
             let mut shared = self.shared.lock();
             std::mem::take(&mut shared.events)
@@ -107,6 +120,44 @@ impl Shard {
                 ShardEvent::Join { actor, value } => self.resume_actor(actor, value),
             }
         }
+    }
+
+    /// 创建根 Actor 并登记启动请求; 根编号先于启动事件就绪, 避免调度循环
+    /// 把根当普通 Actor 启动而丢失根结局.
+    pub(super) fn spawn_root(
+        &mut self,
+        mailboxes: usize,
+        handler: Value,
+        args: Vec<Value>,
+    ) -> Value {
+        let handle = {
+            let mut shared = self.shared.lock();
+            let id = shared.alloc_id();
+            let handle = Arc::new(ActorHandle::new(id, mailboxes, None));
+            self.handle.registry().register_actor(&handle);
+            shared.events.push(ShardEvent::Spawn(SpawnRequest {
+                handle: Arc::clone(&handle),
+                handler,
+                args,
+            }));
+            handle
+        };
+        self.root_actor = Some(handle.id);
+        self.root_result = None;
+        self.handle.mark_events_pending();
+        Value::Pid(handle)
+    }
+
+    pub(super) fn is_root(&self, id: u64) -> bool {
+        self.root_actor == Some(id)
+    }
+
+    pub(super) fn set_root_result(&mut self, result: Result<Value, Error>) {
+        self.root_result = Some(result);
+    }
+
+    pub(super) fn take_root_result(&mut self) -> Option<Result<Value, Error>> {
+        self.root_result.take()
     }
 
     fn start_spawn(&mut self, request: super::shared::SpawnRequest) {
@@ -166,11 +217,10 @@ impl Shard {
         let Some(mut task) = self.actors.remove(&id) else {
             return;
         };
-        let is_root = self.handle.is_root(id);
+        let is_root = self.is_root(id);
         if task.handle.kill_requested() {
             if is_root {
-                self.handle
-                    .set_root_result(Err(Error::runtime(ErrorKind::KillRoot, None)));
+                self.set_root_result(Err(Error::runtime(ErrorKind::KillRoot, None)));
             }
             self.finish_actor(&task, &Err(ExitReason::Killed));
             return;
@@ -179,15 +229,14 @@ impl Shard {
         match task.machine.run_budget(budget) {
             Ok(RunOutcome::Finished(value)) => {
                 if is_root {
-                    self.handle.set_root_result(Ok(value.clone()));
+                    self.set_root_result(Ok(value.clone()));
                 }
                 self.finish_actor(&task, &Ok(value));
             },
             Ok(RunOutcome::Yield) => {
                 if task.handle.kill_requested() {
                     if is_root {
-                        self.handle
-                            .set_root_result(Err(Error::runtime(ErrorKind::KillRoot, None)));
+                        self.set_root_result(Err(Error::runtime(ErrorKind::KillRoot, None)));
                     }
                     self.finish_actor(&task, &Err(ExitReason::Killed));
                 } else {
@@ -198,8 +247,7 @@ impl Shard {
             Ok(RunOutcome::Suspended(wait)) => {
                 if task.handle.kill_requested() {
                     if is_root {
-                        self.handle
-                            .set_root_result(Err(Error::runtime(ErrorKind::KillRoot, None)));
+                        self.set_root_result(Err(Error::runtime(ErrorKind::KillRoot, None)));
                     }
                     self.finish_actor(&task, &Err(ExitReason::Killed));
                 } else {
@@ -208,14 +256,13 @@ impl Shard {
             },
             Ok(RunOutcome::ActorExit(reason)) => {
                 if is_root {
-                    self.handle
-                        .set_root_result(Err(Error::internal("@Main 不能以 Actor 方式终止")));
+                    self.set_root_result(Err(Error::internal("@Main 不能以 Actor 方式终止")));
                 }
                 self.finish_actor(&task, &Err(reason));
             },
             Err(error) => {
                 if is_root {
-                    self.handle.set_root_result(Err(error.clone()));
+                    self.set_root_result(Err(error.clone()));
                 } else {
                     self.shared
                         .lock()
@@ -230,7 +277,7 @@ impl Shard {
     fn actor_wait(&mut self, id: u64, mut task: ActorTask, wait: Wait) {
         match wait {
             Wait::Join { target } => {
-                if self.handle.is_root(target.id) {
+                if self.is_root(target.id) {
                     task.machine
                         .resume_error(Error::runtime(ErrorKind::JoinRoot, None));
                     task.wait = None;
@@ -364,9 +411,8 @@ impl Shard {
     }
 
     fn kill_actor(&mut self, id: u64) {
-        if self.handle.is_root(id) {
-            self.handle
-                .set_root_result(Err(Error::runtime(ErrorKind::KillRoot, None)));
+        if self.is_root(id) {
+            self.set_root_result(Err(Error::runtime(ErrorKind::KillRoot, None)));
         }
         if let Some(task) = self.actors.remove(&id) {
             self.ready.retain(|queued| *queued != id);
@@ -389,6 +435,8 @@ impl Shard {
         self.timers.clear();
         self.receive_waiters.clear();
         self.io_waiters.clear();
+        self.root_actor = None;
+        self.root_result = None;
     }
 
     fn wake_send(&mut self, target: u64, index: usize) {
@@ -436,6 +484,10 @@ impl Shard {
     }
 
     pub(super) fn fire_timers(&mut self) {
+        // 没有活动定时器时不取当前时间; 调度内循环的热路径上这是系统调用开销.
+        if self.timers.is_empty() {
+            return;
+        }
         for (actor, kind) in self.timers.take_due(Instant::now()) {
             let value = match kind {
                 TimerKind::Sleep => Value::Nil,

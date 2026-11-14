@@ -30,6 +30,8 @@ pub(crate) struct GcRegistry {
     actors: Mutex<Vec<Weak<ActorHandle>>>,
     /// 上次收集后新登记的候选对象数, 供自动触发判断.
     allocations: AtomicUsize,
+    /// 当前登记在表的候选对象数; 惰性清理造成的偏差在下一次收集时归零.
+    live: AtomicUsize,
     /// 已执行的收集次数; 供测试确认自动触发确实发生.
     collections: AtomicUsize,
 }
@@ -42,51 +44,57 @@ impl GcRegistry {
 
     pub(crate) fn register_closure(&self, closure: &Arc<Closure>) {
         self.allocations.fetch_add(1, Ordering::Relaxed);
+        self.live.fetch_add(1, Ordering::Relaxed);
         let mut closures = self.closures.lock();
         closures.push(Arc::downgrade(closure));
         if closures.len().is_multiple_of(PRUNE_THRESHOLD) {
-            prune(&mut closures);
+            let removed = prune(&mut closures);
+            self.live.fetch_sub(removed, Ordering::Relaxed);
         }
     }
 
     pub(crate) fn register_actor(&self, actor: &Arc<ActorHandle>) {
         self.allocations.fetch_add(1, Ordering::Relaxed);
+        self.live.fetch_add(1, Ordering::Relaxed);
         let mut actors = self.actors.lock();
         actors.push(Arc::downgrade(actor));
         if actors.len().is_multiple_of(PRUNE_THRESHOLD) {
-            prune(&mut actors);
+            let removed = prune(&mut actors);
+            self.live.fetch_sub(removed, Ordering::Relaxed);
         }
     }
 
     /// 断开未标记对象上的强引用; 调用前必须完成标记.
     pub(crate) fn sweep(&self, marker: &Marker) {
         let closures = std::mem::take(&mut *self.closures.lock());
-        let mut kept = Vec::with_capacity(closures.len());
+        let mut kept_closures = Vec::with_capacity(closures.len());
         for weak in closures {
             let Some(closure) = weak.upgrade() else {
                 continue;
             };
             if marker.closure_marked(&closure) {
-                kept.push(weak);
+                kept_closures.push(weak);
             } else {
                 closure.clear_captures();
             }
         }
-        *self.closures.lock() = kept;
 
         let actors = std::mem::take(&mut *self.actors.lock());
-        let mut kept = Vec::with_capacity(actors.len());
+        let mut kept_actors = Vec::with_capacity(actors.len());
         for weak in actors {
             let Some(actor) = weak.upgrade() else {
                 continue;
             };
             if marker.actor_marked(&actor) {
-                kept.push(weak);
+                kept_actors.push(weak);
             } else {
                 actor.clear_for_gc();
             }
         }
-        *self.actors.lock() = kept;
+        self.live
+            .store(kept_closures.len() + kept_actors.len(), Ordering::Relaxed);
+        *self.closures.lock() = kept_closures;
+        *self.actors.lock() = kept_actors;
         self.allocations.store(0, Ordering::Relaxed);
         self.collections.fetch_add(1, Ordering::Relaxed);
     }
@@ -97,6 +105,12 @@ impl GcRegistry {
         self.allocations.load(Ordering::Relaxed)
     }
 
+    /// 当前登记在表的候选对象总数; 自适应收集阈值按它上调.
+    #[must_use]
+    pub(crate) fn live_candidates(&self) -> usize {
+        self.live.load(Ordering::Relaxed)
+    }
+
     /// 已执行的收集次数; 供测试确认自动触发.
     #[cfg(test)]
     #[must_use]
@@ -105,8 +119,10 @@ impl GcRegistry {
     }
 }
 
-fn prune<T>(items: &mut Vec<Weak<T>>) {
+fn prune<T>(items: &mut Vec<Weak<T>>) -> usize {
+    let before = items.len();
     items.retain(|item| item.strong_count() > 0);
+    before - items.len()
 }
 
 /// 标记器: 从根出发记录可达闭包与 Actor 句柄.

@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 const USAGE_TOP: &str = "ksl <命令> [参数]";
 const USAGE_RUN: &str =
-    "ksl run <文件> [-- <参数>...]\n       ksl run --code <代码> [-- <参数>...]";
-const USAGE_REPL: &str = "ksl repl [文件] [--code <代码>]";
+    "ksl run <文件> [选项] [-- <参数>...]\n       ksl run --code <代码> [选项] [-- <参数>...]";
+const USAGE_REPL: &str = "ksl repl [选项] [文件]";
 
 const HELP_TOP: &str = "\
 ksl 编程语言
@@ -36,30 +36,32 @@ const HELP_RUN: &str = "\
 执行脚本或代码
 
 用法:
-  ksl run <文件> [-- <参数>...]
-  ksl run --code <代码> [-- <参数>...]
+  ksl run <文件> [选项] [-- <参数>...]
+  ksl run --code <代码> [选项] [-- <参数>...]
 
 参数:
   <文件>            源文件路径
   [-- <参数>...]    传给脚本的命令行参数
 
 选项:
-  -c, --code <代码>  直接执行的代码
-  -h, --help         显示帮助
+  -c, --code <代码>          直接执行的代码
+  -w, --io-workers <数量>    阻塞 I/O 工作线程数, 默认按 CPU 核数取 4-16
+  -h, --help                 显示帮助
 ";
 
 const HELP_REPL: &str = "\
 进入交互模式
 
 用法:
-  ksl repl [文件] [--code <代码>]
+  ksl repl [选项] [文件]
 
 参数:
   [文件]  启动前加载的模块文件
 
 选项:
-  -c, --code <代码>  启动前执行的代码
-  -h, --help         显示帮助
+  -c, --code <代码>          启动前执行的代码
+  -w, --io-workers <数量>    阻塞 I/O 工作线程数, 默认按 CPU 核数取 4-16
+  -h, --help                 显示帮助
 ";
 
 const HELP_LSP: &str = "\
@@ -76,10 +78,12 @@ pub(crate) enum Action {
     Run {
         source: Source,
         args: Vec<String>,
+        io_workers: Option<usize>,
     },
     Repl {
         file: Option<PathBuf>,
         code: Option<String>,
+        io_workers: Option<usize>,
     },
     Lex(PathBuf),
     Ast(PathBuf),
@@ -231,6 +235,7 @@ fn topic(name: &str) -> Option<Topic> {
         "check" => Some(Topic::Check),
         "cps" => Some(Topic::Cps),
         "linear" => Some(Topic::Linear),
+        "lsp" => Some(Topic::Lsp),
         _ => None,
     }
 }
@@ -238,6 +243,7 @@ fn topic(name: &str) -> Option<Topic> {
 fn parse_run(args: &[OsString]) -> Result<Action, CliError> {
     let mut file = None;
     let mut code = None;
+    let mut io_workers = None;
     let mut script_args = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -260,6 +266,11 @@ fn parse_run(args: &[OsString]) -> Result<Action, CliError> {
             && let Some(value) = code_value(text, args.get(i + 1), &mut code, USAGE_RUN)?
         {
             i += value;
+        } else if let Some(text) = arg.to_str()
+            && let Some(value) =
+                workers_value(text, args.get(i + 1), &mut io_workers, USAGE_RUN)?
+        {
+            i += value;
         } else if is_option(arg) {
             return Err(unexpected_option(arg, Topic::Run));
         } else if file.is_some() {
@@ -280,12 +291,14 @@ fn parse_run(args: &[OsString]) -> Result<Action, CliError> {
     Ok(Action::Run {
         source,
         args: script_args,
+        io_workers,
     })
 }
 
 fn parse_repl(args: &[OsString]) -> Result<Action, CliError> {
     let mut file = None;
     let mut code = None;
+    let mut io_workers = None;
     let mut options_ended = false;
     let mut i = 0;
     while i < args.len() {
@@ -306,6 +319,14 @@ fn parse_repl(args: &[OsString]) -> Result<Action, CliError> {
                 i += 1;
                 continue;
             }
+            if let Some(text) = arg.to_str()
+                && let Some(value) =
+                    workers_value(text, args.get(i + 1), &mut io_workers, USAGE_REPL)?
+            {
+                i += value;
+                i += 1;
+                continue;
+            }
             if is_option(arg) {
                 return Err(unexpected_option(arg, Topic::Repl));
             }
@@ -316,7 +337,48 @@ fn parse_repl(args: &[OsString]) -> Result<Action, CliError> {
         file = Some(PathBuf::from(arg));
         i += 1;
     }
-    Ok(Action::Repl { file, code })
+    Ok(Action::Repl {
+        file,
+        code,
+        io_workers,
+    })
+}
+
+/// 解析 `-w` / `--io-workers` 形态; 返回 Some 表示已消费该选项, 值为需要额外跳过的参数数.
+///
+/// 长选项与短选项都接受紧贴值, 与常见命令行习惯一致.
+fn workers_value(
+    text: &str,
+    next: Option<&OsString>,
+    workers: &mut Option<usize>,
+    usage: &'static str,
+) -> Result<Option<usize>, CliError> {
+    let value = if text == "-w" || text == "--io-workers" {
+        let Some(next) = next else {
+            return Err(CliError::new("选项 --io-workers 缺少值", usage));
+        };
+        // 与常见命令行习惯一致: 选项值不能以 `-` 开头, 需要时改用紧贴形态.
+        if next == "--" || is_option(next) {
+            return Err(CliError::new("选项 --io-workers 缺少值", usage));
+        }
+        utf8_value(next, "--io-workers", usage)?
+    } else if let Some(value) = text.strip_prefix("--io-workers=") {
+        value.to_owned()
+    } else if let Some(value) = text.strip_prefix("-w").filter(|value| !value.is_empty()) {
+        value.to_owned()
+    } else {
+        return Ok(None);
+    };
+    let count = value
+        .parse::<usize>()
+        .map_err(|_| CliError::new("选项 --io-workers 的值必须是正整数", usage))?;
+    if count == 0 {
+        return Err(CliError::new("选项 --io-workers 的值必须大于 0", usage));
+    }
+    if workers.replace(count).is_some() {
+        return Err(CliError::new("选项 --io-workers 不能重复使用", usage));
+    }
+    Ok(Some(usize::from(text == "-w" || text == "--io-workers")))
 }
 
 /// 解析 `-c` / `--code` 形态; 返回 Some 表示已消费该选项, 值为需要额外跳过的参数数.

@@ -302,7 +302,7 @@ fn resolve_app(
         return Ok(ty);
     }
     if is_data(node) {
-        // 用户 Data 不带类型参数, 泛型留待后续设计.
+        // 用户 Data 不带类型参数.
         return Err(unknown_type(name));
     }
     if node == kw.pid_ {

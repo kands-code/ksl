@@ -57,6 +57,8 @@ fn help_and_version_cover_all_commands() {
     assert!(stdout(&output).contains("执行脚本或代码"));
     let output = run(&["help", "lex"]);
     assert!(stdout(&output).contains("输出词法记号序列"));
+    let output = run(&["help", "lsp"]);
+    assert!(stdout(&output).contains("启动语言服务器"));
 }
 
 #[test]

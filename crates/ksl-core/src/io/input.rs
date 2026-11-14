@@ -422,8 +422,21 @@ fn read_stdin_line() -> std::io::Result<Option<String>> {
     let mut raw = String::new();
     match std::io::stdin().read_line(&mut raw) {
         Ok(0) => Ok(None),
-        Ok(_) => Ok(Some(strip_line_ending(raw))),
+        Ok(_) => {
+            track_stdin_echo(&raw);
+            Ok(Some(strip_line_ending(raw)))
+        },
         Err(error) => Err(error),
+    }
+}
+
+/// 把刚读到的输入回显计入标准输出跟踪.
+///
+/// 回显由终端行规程写到终端设备; 只有标准输出也是终端时, 它才与程序输出
+/// 显示在同一位置. 未以换行结束时, 光标仍停在输入末尾.
+fn track_stdin_echo(raw: &str) {
+    if std::io::stdout().is_terminal() {
+        super::track_terminal_echo(raw.ends_with('\n'));
     }
 }
 

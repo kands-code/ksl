@@ -47,17 +47,18 @@ bench/repl.sh 3000
 
 ## 当前测量
 
-下列数字取自 Apple M1 Pro, macOS 27.2, release 构建; 换机器后需重新测量.
-记录当前性能用于确认量级, 不作为跨机器指标.
+下列数字取自 Apple M1 Pro, macOS 27.2, release 构建 (fat LTO, 单 codegen unit); 换机器后需重新测量.
+记录当前性能用于确认量级, 不作为跨机器指标. 本轮测量时有轻度后台负载,
+绝对值与安静环境相差约 5%-10%, 前后对比应以同环境为准.
 
 | 用例             | 实际耗时 | 峰值常驻内存 |
 | ---------------- | -------- | ------------ |
-| `call.ksl`       | 72 ms    | 5.6 MiB      |
-| `list_build.ksl` | 36 ms    | 5.3 MiB      |
-| `list_scan.ksl`  | 38 ms    | 5.8 MiB      |
-| `string.ksl`     | 15 ms    | 8.4 MiB      |
-| `actor.ksl`      | 32 ms    | 5.0 MiB      |
-| `timer.ksl`      | 39 ms    | 5.6 MiB      |
-| `timeout.ksl`    | 23 ms    | 8.8 MiB      |
+| `call.ksl`       | 39 ms    | 5.3 MiB      |
+| `list_build.ksl` | 24 ms    | 4.9 MiB      |
+| `list_scan.ksl`  | 21 ms    | 5.5 MiB      |
+| `string.ksl`     | 13 ms    | 8.0 MiB      |
+| `actor.ksl`      | 23 ms    | 4.6 MiB      |
+| `timer.ksl`      | 29 ms    | 5.7 MiB      |
+| `timeout.ksl`    | 22 ms    | 9.0 MiB      |
 
-REPL 长会话 (3000 次输入, `bench/repl.sh 3000`): 约 338 ms, 9.6 MiB.
+REPL 长会话 (3000 次输入, `bench/repl.sh 3000`): 约 326 ms, 9.0 MiB.

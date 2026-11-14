@@ -3253,7 +3253,15 @@
     "named": false
   },
   {
+    "type": "IsDictEmpty",
+    "named": false
+  },
+  {
     "type": "IsErr",
+    "named": false
+  },
+  {
+    "type": "IsListEmpty",
     "named": false
   },
   {
@@ -3262,6 +3270,10 @@
   },
   {
     "type": "IsOk",
+    "named": false
+  },
+  {
+    "type": "IsSetEmpty",
     "named": false
   },
   {

@@ -149,6 +149,12 @@ impl Checker {
                 self.check_expr_expect(&args[0], Some(&InferTy::dict(key, value)))?;
                 Ok(InferTy::U64)
             },
+            K::IsEmpty => {
+                let key = self.infer.fresh(span, "@IsDictEmpty 键");
+                let value = self.infer.fresh(span, "@IsDictEmpty 值");
+                self.check_expr_expect(&args[0], Some(&InferTy::dict(key, value)))?;
+                Ok(InferTy::Bool)
+            },
             K::Entries => {
                 let key = self.infer.fresh(span, "@DictEntries 键");
                 let value = self.infer.fresh(span, "@DictEntries 值");
@@ -253,6 +259,11 @@ impl Checker {
                 let elem = self.infer.fresh(span, "@SetLength 元素");
                 self.check_expr_expect(&args[0], Some(&InferTy::set(elem)))?;
                 Ok(InferTy::U64)
+            },
+            K::IsEmpty => {
+                let elem = self.infer.fresh(span, "@IsSetEmpty 元素");
+                self.check_expr_expect(&args[0], Some(&InferTy::set(elem)))?;
+                Ok(InferTy::Bool)
             },
             K::Items => {
                 let elem = self.infer.fresh(span, "@SetItems 元素");

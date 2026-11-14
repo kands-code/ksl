@@ -1,0 +1,72 @@
+# @run
+# 半关闭与关闭状态: 客户端关写侧后服务端读到 EOF 并回复;
+# SocketIsClosed 跟踪句柄的关闭状态.
+
+@Main[[self : Pid[nil, nil]] : nil,
+  @Block[
+    @Let[listener, @Match[TcpListen["127.0.0.1", 0U], {
+      (/Ok[listener], listener),
+      (/Err[e], @Panic["TcpListen 失败"])
+    }]],
+    @Let[port, TcpLocalPort[listener]],
+    @Let[server, @Handler[[self : Pid[nil, nil], listener : TcpListener] : nil,
+      @Block[
+        @Match[TcpAccept[listener, 5000U], {
+          (/Ok[socket], @Block[
+            @Let[first, @Match[SocketReadLine[socket, 1024U, 5000U], {
+              (/Ok[line], @Match[line, {
+                (/Some[value], value),
+                (/None[], @Panic["服务端首读意外 EOF"])
+              }]),
+              (/Err[e], @Panic["服务端首读失败"])
+            }]],
+            @Assert[EqualString[first, "hello"], "服务端首读内容"],
+            @Let[second, @Match[SocketReadLine[socket, 1024U, 5000U], {
+              (/Ok[line], @Match[line, {
+                (/Some[value], @Panic["对端关写侧后仍读到数据"]),
+                (/None[], "eof")
+              }]),
+              (/Err[e], @Panic["服务端次读失败"])
+            }]],
+            @Let[_written, SocketWriteLine[socket, "bye", 5000U]],
+            @Let[_closed, SocketClose[socket]],
+            nil
+          ]),
+          (/Err[e], @Panic["TcpAccept 失败"])
+        }]
+      ]]],
+    @Let[client, @Handler[[self : Pid[nil, string], port : u64] : string,
+      @Block[
+        @Match[TcpConnect["127.0.0.1", port, 5000U], {
+          (/Ok[socket], @Block[
+            @Assert[Not[SocketIsClosed[socket]], "连接建立后句柄应打开"],
+            @Let[_written, SocketWriteLine[socket, "hello", 5000U]],
+            @Match[SocketShutdownWrite[socket], {
+              (/Ok[_], nil),
+              (/Err[e], @Panic["SocketShutdownWrite 失败"])
+            }],
+            @Let[text, @Match[SocketReadLine[socket, 1024U, 5000U], {
+              (/Ok[line], @Match[line, {
+                (/Some[value], value),
+                (/None[], @Panic["客户端意外 EOF"])
+              }]),
+              (/Err[e], @Panic["客户端读取失败"])
+            }]],
+            @Assert[EqualString[text, "bye"], "关写侧后仍可读取回复"],
+            @Let[_closed, SocketClose[socket]],
+            @Assert[SocketIsClosed[socket], "关闭后句柄应关闭"],
+            text
+          ]),
+          (/Err[e], @Panic["TcpConnect 失败"])
+        }]
+      ]]],
+    @Let[server_pid, @Spawn[server, listener]],
+    @Let[client_pid, @Spawn[client, port]],
+    @Let[result, @Match[@Join[client_pid], {
+      (/Ok[text], text),
+      (/Err[e], @Panic["客户端 Join 失败"])
+    }]],
+    @Assert[EqualString[result, "bye"], "客户端应收到回复"],
+    @Let[_server_result, @Join[server_pid]],
+    @Let[_closed, TcpCloseListener[listener]]
+  ]]

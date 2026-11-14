@@ -26,6 +26,8 @@ pub(crate) struct SchedulerHandle {
     gc: Arc<GcRegistry>,
     /// 调度器唤醒通道; 容量为 1, 多次事件合并为一次唤醒.
     wake: Sender<()>,
+    /// 事件队列非空标记; 调度器空转时免锁判空, 与事件入队配对使用.
+    events_pending: Arc<AtomicBool>,
 }
 
 struct RegisteredPid {
@@ -102,9 +104,6 @@ pub(super) struct Shared {
     join_targets: HashMap<u64, u64>,
     /// 未观察的 Actor 运行时错误; 由宿主统一取走并渲染.
     pub(super) actor_errors: Vec<(Arc<AtomicBool>, Error)>,
-    /// `@Main` 根 Actor 的编号; 根结局结束一次根运行.
-    root_actor: Option<u64>,
-    pub(super) root_result: Option<Result<Value, Error>>,
 }
 
 impl Shared {
@@ -133,15 +132,19 @@ impl Shared {
                 marker.mark_value(value);
             }
         }
-        if let Some(Ok(value)) = &self.root_result {
-            marker.mark_value(value);
-        }
         for entry in self.names.values() {
             marker.mark_actor(&entry.pid);
         }
         for timer in self.send_timers.values() {
             marker.mark_value(&timer.message);
         }
+    }
+
+    /// 分配下一个 Actor 编号.
+    pub(super) fn alloc_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
     }
 
     fn insert_name(&mut self, name: Arc<str>, entry: RegisteredPid) {
@@ -286,14 +289,13 @@ impl SchedulerHandle {
             join_waiters: HashMap::new(),
             join_targets: HashMap::new(),
             actor_errors: Vec::new(),
-            root_actor: None,
-            root_result: None,
         }));
         (
             Self {
                 shared: Arc::clone(&shared),
                 gc,
                 wake,
+                events_pending: Arc::new(AtomicBool::new(false)),
             },
             shared,
         )
@@ -313,7 +315,20 @@ impl SchedulerHandle {
     /// 把事件放入事件队列并唤醒调度器.
     pub(super) fn push_event(&self, event: ShardEvent) {
         self.shared.lock().events.push(event);
+        // 标记在入队之后发布: 见到标记为真时, 其前置入队必然可见;
+        // 入队晚于标记读取的事件由下一轮的标记重新覆盖.
+        self.events_pending.store(true, Ordering::Release);
         self.wake();
+    }
+
+    /// 取走事件非空标记; 返回 false 表示事件队列必为空, 无需加锁.
+    pub(super) fn take_events_pending(&self) -> bool {
+        self.events_pending.swap(false, Ordering::Acquire)
+    }
+
+    /// 只置事件非空标记, 不唤醒; 事件入队已由调用方在同一临界区完成.
+    pub(super) fn mark_events_pending(&self) {
+        self.events_pending.store(true, Ordering::Release);
     }
 
     fn wake(&self) {
@@ -527,33 +542,6 @@ impl SchedulerHandle {
         Value::Pid(handle)
     }
 
-    /// 创建根 Actor 并登记启动请求.
-    ///
-    /// 根编号必须在启动事件入队前写入共享状态, 否则调度循环可能先启动
-    /// 根 Actor, 把它当成普通 Actor 而丢失根结局.
-    pub(crate) fn spawn_root(
-        &self,
-        mailboxes: usize,
-        handler: Value,
-        args: Vec<Value>,
-    ) -> Value {
-        let mut state = self.shared.lock();
-        let id = state.next_id;
-        state.next_id += 1;
-        let handle = Arc::new(ActorHandle::new(id, mailboxes, None));
-        self.gc.register_actor(&handle);
-        state.root_actor = Some(id);
-        state.root_result = None;
-        state.events.push(ShardEvent::Spawn(SpawnRequest {
-            handle: Arc::clone(&handle),
-            handler,
-            args,
-        }));
-        drop(state);
-        self.wake();
-        Value::Pid(handle)
-    }
-
     fn enqueue_spawn(
         &self,
         parent: Option<&Arc<ActorHandle>>,
@@ -563,8 +551,7 @@ impl SchedulerHandle {
         args: Vec<Value>,
     ) -> Arc<ActorHandle> {
         let mut state = self.shared.lock();
-        let id = state.next_id;
-        state.next_id += 1;
+        let id = state.alloc_id();
         let parent_handle = if detached { None } else { parent.cloned() };
         let handle = Arc::new(ActorHandle::new(id, mailboxes, parent_handle.clone()));
         self.gc.register_actor(&handle);
@@ -576,19 +563,9 @@ impl SchedulerHandle {
             handler,
             args,
         }));
+        // 标记在入队之后发布; 与 drain 端的对齐方式见 push_event.
+        self.events_pending.store(true, Ordering::Release);
         handle
-    }
-
-    pub(crate) fn is_root(&self, id: u64) -> bool {
-        self.shared.lock().root_actor == Some(id)
-    }
-
-    pub(crate) fn set_root_result(&self, result: Result<Value, Error>) {
-        self.shared.lock().root_result = Some(result);
-    }
-
-    pub(crate) fn take_root_result(&self) -> Option<Result<Value, Error>> {
-        self.shared.lock().root_result.take()
     }
 
     /// 登记 Join 等待; 目标已终止时直接返回结局.
@@ -639,6 +616,7 @@ impl SchedulerHandle {
         };
         let shared = Arc::clone(&self.shared);
         let wake = self.wake.clone();
+        let events_pending = Arc::clone(&self.events_pending);
         crate::io::submit_task(job, id, cancel, move |result| {
             let mut shared = shared.lock();
             shared.io_cancellations.remove(&id);
@@ -648,6 +626,8 @@ impl SchedulerHandle {
                 shared.prelude_io.push((id, result));
             }
             drop(shared);
+            // 标记在入队之后发布; 与 drain 端的对齐方式见 push_event.
+            events_pending.store(true, Ordering::Release);
             // 容量为 1, 合并重复通知; 运行时被丢弃后的发送失败无需处理.
             let _ = wake.try_send(());
         });
@@ -705,8 +685,6 @@ impl SchedulerHandle {
             shared.actor_errors.clear();
             shared.join_waiters.clear();
             shared.join_targets.clear();
-            shared.root_actor = None;
-            shared.root_result = None;
             shared.clear_names();
             shared.clear_monitors();
             shared.clear_send_timers();

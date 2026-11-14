@@ -114,7 +114,7 @@ updated: 2026-11-14
 - 空文件句柄: `ClosedFile[] -> File` 给出处于关闭态的句柄, 任何读写都报 `IOError/InvalidHandle[]`. 供必须给出 `File` 值而手上没有可用句柄的场合使用, 例如 `ResultGet` 的默认值.
 - I/O 错误: 内置 Data 类型 `IOError`, 变体为 `NotFound[path]`, `PermissionDenied[path]`, `AlreadyExists[path]`, `InvalidUtf8[path]`, `NotADirectory[path]`, `IsADirectory[path]`, `DirectoryNotEmpty[path]`, `InvalidHandle[]`, `NotReadable[]`, `NotWritable[]`, `NotATerminal[]`, `Interrupted[]`, `Other[message]`. 文件与标准输入的可恢复失败统一走 `Result[T, IOError]`.
 - I/O 路径: 文件与目录操作按宿主当前工作目录解释相对路径; 模块 `@Use` 路径仍相对模块文件目录, 二者不混用.
-- I/O 执行: 输入输出由全局唯一的系统 Actor 承担, 见第 13 节; 文件, 目录与其他阻塞操作由固定四个工作线程执行, 当前任务挂起, 完成后由调度器唤醒, 不会阻塞其他 Actor. 标准输入由服务的读取线程持续读取并缓冲: 终端模式走 crossterm 事件, 管道与文件模式按行缓冲, 缓冲上限 4 KB, 按未消费字节计, 单行自身超过上限时允许超限读完; 输入请求从缓冲消费, 取消不丢行, 已消费未交付的输入退回缓冲. 终端所有权归服务单点: raw mode, crossterm 事件源与 bracketed paste 均由服务管理.
+- I/O 执行: 输入输出由全局唯一的系统 Actor 承担, 见第 13 节; 文件, 目录与其他阻塞操作由固定数量的工作线程执行, 线程数默认按 CPU 核数在 4 至 16 之间取定, `ksl run` 与 `ksl repl` 的 `--io-workers` 选项可覆盖; 当前任务挂起, 完成后由调度器唤醒, 不会阻塞其他 Actor. 标准输入由服务的读取线程持续读取并缓冲: 终端模式走 crossterm 事件, 管道与文件模式按行缓冲, 缓冲上限 4 KB, 按未消费字节计, 单行自身超过上限时允许超限读完; 输入请求从缓冲消费, 取消不丢行, 已消费未交付的输入退回缓冲. 终端所有权归服务单点: raw mode, crossterm 事件源与 bracketed paste 均由服务管理.
 - 流与迭代器: 提供 `File` 句柄与按行/按块读取.
 - 环境: `Args[] -> List[string]` 取命令行参数, 无参数时为空列表; 启动后参数由全部任务共享, Actor 内读取结果与程序根一致; `GetEnv[name] -> Option[string]` 取环境变量, 未设置时返回 `Option/None[]`.
 - 解析: `ParseI64[string] -> Result[i64, string]`, `ParseF64[string] -> Result[f64, string]`, 错误负载为消息原文; 解析错误无结构化需求时直接用 string. I/O 使用独立的 `IOError` Data 类型.
@@ -132,7 +132,7 @@ updated: 2026-11-14
 - 组合: `@ListRiffle[list, elem, n]` 每隔 n 个元素插入一次元素, n 为 1 时即相邻元素间插入, 间隔超过列表长度返回原列表, 间隔为 0 报错; `@ListWindow[list, n]` 滑动窗口分组, 窗口大于长度返回空列表, 窗口为 0 报错; `@ListZip[list1, list2]` 配对压缩, 长度不一致时截短, 返回 `List[Pair[K, V]]`; `@ListZipWith[list1, list2, fn]` 按函数合并两个列表, 长度不一致时截短.
 - 构造与重排: `@ListReverse[list]` 反转; `@ListRepeat[value, n]` 重复构造, n 为 0 返回空列表; `@ListFlatten[list]` 把 `List[List[T]]` 摊平为 `List[T]`; `@ListChunk[list, n]` 按 n 个元素分组, n 为 0 报错, 最后一块可不足 n.
 - 配对访问: `@Fst[pair] -> K`, `@Snd[pair] -> V`, 为特殊形式, 因 `@Match` 限定于 Data.
-- 度量: `@ListLength[list] -> u64`.
+- 度量与判定: `@ListLength[list] -> u64`, `@IsListEmpty[list] -> bool`.
 - 拼接: `@ListConcatenate[list1, list2]`.
 - 语义与实现分离: 变更走持久化结构的路径复制, 新旧列表共享大部分节点; 由于绑定不可变, 这种共享对程序不可见.
 - 参数个数固定, 不足或多余报 `ArityMismatch`.
@@ -147,14 +147,14 @@ updated: 2026-11-14
 - 边界: `@Match` 是通用消解器, 用于解构多个变体, 读取错误负载或组合多个 Option/Result; 便捷操作覆盖判定, 映射, 绑定与默认取值. `ResultGet` 丢弃错误负载, 语义同 `unwrap_or`; 需要错误内容时必须用 `@Match`. 映射与绑定接收 `@Fn`, 而 `@Fn` 体内不能使用 Actor 原语, 分支中需要 `@Spawn`/`@Join` 等 Actor 原语时仍用 `@Match`. 不提供 `MapErr`, `OrElse`, `Filter`.
 - 参数个数固定, 不足或多余报 `ArityMismatch`.
 
-- 内置函数命名约定: 数值与比较为动词加类型后缀, 例如 `AddI64`, `SubI64`, `MulI64`, `LessF64`, `EqualString`; 数学与编程中作为记号存在者用短名, 例如 `Add`, `Sub`, `Mul`; 承载语义区分者用全称, 例如 `Divide` 向下取整除, `Quotient` 向零截断, `Remainder` 带号余数, `Modulo` 取模; 容器与字符串操作为 `<族><动词>` 前缀, 例如 `StringSplit`, `StringJoin`, `ListMap`, `DictLookup`; 编解码为 `Encode` 与 `Decode`, 例如 `EncodeUtf8`; 值转换为 `FromTo`, 例如 `U64ToChar`; I/O 为动词开头, 例如 `ReadFile`, `WriteString`. 数学标准名 `Abs`, `Sqrt`, `Sin`, `Cos`, `Tan`, `ArcSin` 等保留. `u` 后缀为 u8, `U` 后缀为 u64, 无后缀为 i64. 不使用 `Div`, `Eq`, `Lt`, `Chars`, `Concat` 一类缩写.
+- 内置函数命名约定: 数值与比较为动词加类型后缀, 例如 `AddI64`, `SubI64`, `MulI64`, `LessF64`, `EqualString`; 数学与编程中作为记号存在者用短名, 例如 `Add`, `Sub`, `Mul`; 承载语义区分者用全称, 例如 `Divide` 向下取整除, `Quotient` 向零截断, `Remainder` 带号余数, `Modulo` 取模; 容器与字符串操作为 `<族><动词>` 前缀, 例如 `StringSplit`, `StringJoin`, `ListMap`, `DictLookup`; 返回 bool 的空判定为 `Is<容器>Empty`, 例如 `IsListEmpty`, `IsDictEmpty`, `IsSetEmpty`; 编解码为 `Encode` 与 `Decode`, 例如 `EncodeUtf8`; 值转换为 `FromTo`, 例如 `U64ToChar`; I/O 为动词开头, 例如 `ReadFile`, `WriteString`. 数学标准名 `Abs`, `Sqrt`, `Sin`, `Cos`, `Tan`, `ArcSin` 等保留. `u` 后缀为 u8, `U` 后缀为 u64, 无后缀为 i64. 不使用 `Div`, `Eq`, `Lt`, `Chars`, `Concat` 一类缩写.
 
 ### 4.6 Dict 与 Set
 
 - 表示: `Dict[K, V]` 与 `Set[T]` 是不可变持久化有序映射与集合, 内部使用 imbl 的 `OrdMap` 与 `OrdSet`; 遍历按键排序, 结果稳定. 键限制为 i64, u8, u64, char, bool 与 string; 不支持 f64, Data, List, Pair 等.
 - 字面量: `@Dict[(键, 值), ...]` 与 `@Set[值, ...]`; 空字面量需要期望类型或标注, 例如 `@Let[d : Dict[string, i64], @Dict[]]`; 重复键在 Dict 中后写覆盖先写.
-- Dict 操作: `@DictLookup[dict, key] -> Option[V]`, `@DictGet[dict, key, default] -> V` 在缺键时才求值默认表达式, `@DictPut[dict, key, value] -> Dict[K, V]`, `@DictUpdate[dict, key, fn, default] -> Dict[K, V]` 在缺键时才求值默认值, 命中时以旧值调用 `fn`, `@DictFilter[dict, pred] -> Dict[K, V]` 以 `Fn[[K, V]: bool]` 过滤, `@DictRemove[dict, key] -> Dict[K, V]`, `@DictHas[dict, key] -> bool`, `@DictLength[dict] -> u64`, `@DictEntries[dict] -> List[Pair[K, V]]`, `@DictKeys[dict] -> List[K]`, `@DictValues[dict] -> List[V]`, `@DictMerge[first, second] -> Dict[K, V]` 中后者覆盖同名键, `@DictFromEntries[entries] -> Dict[K, V]`.
-- Set 操作: `@SetInsert[set, value] -> Set[T]`, `@SetRemove[set, value] -> Set[T]`, `@SetHas[set, value] -> bool`, `@SetLength[set] -> u64`, `@SetItems[set] -> List[T]`, `@SetFilter[set, pred] -> Set[T]` 以 `Fn[[T]: bool]` 过滤, `@SetUnion[a, b]`, `@SetIntersect[a, b]`, `@SetDifference[a, b]` 返回新集合, `@SetFromList[list] -> Set[T]`.
+- Dict 操作: `@DictLookup[dict, key] -> Option[V]`, `@DictGet[dict, key, default] -> V` 在缺键时才求值默认表达式, `@DictPut[dict, key, value] -> Dict[K, V]`, `@DictUpdate[dict, key, fn, default] -> Dict[K, V]` 在缺键时才求值默认值, 命中时以旧值调用 `fn`, `@DictFilter[dict, pred] -> Dict[K, V]` 以 `Fn[[K, V]: bool]` 过滤, `@DictRemove[dict, key] -> Dict[K, V]`, `@DictHas[dict, key] -> bool`, `@DictLength[dict] -> u64`, `@IsDictEmpty[dict] -> bool`, `@DictEntries[dict] -> List[Pair[K, V]]`, `@DictKeys[dict] -> List[K]`, `@DictValues[dict] -> List[V]`, `@DictMerge[first, second] -> Dict[K, V]` 中后者覆盖同名键, `@DictFromEntries[entries] -> Dict[K, V]`.
+- Set 操作: `@SetInsert[set, value] -> Set[T]`, `@SetRemove[set, value] -> Set[T]`, `@SetHas[set, value] -> bool`, `@SetLength[set] -> u64`, `@IsSetEmpty[set] -> bool`, `@SetItems[set] -> List[T]`, `@SetFilter[set, pred] -> Set[T]` 以 `Fn[[T]: bool]` 过滤, `@SetUnion[a, b]`, `@SetIntersect[a, b]`, `@SetDifference[a, b]` 返回新集合, `@SetFromList[list] -> Set[T]`.
 - Dict 与 Set 不可打印; 需要展示时用 `@DictEntries` 或 `@SetItems` 转为列表, 再按需格式化.
 
 ### 4.7 时间与日期
@@ -218,7 +218,7 @@ updated: 2026-11-14
 - 具名函数定义: `@Def[名字, [x : i64] : i64, 体]`; 它是语句, 在当前作用域绑定函数名, 值为 nil, 默认自递归; 签名本身就是类型来源, 无需额外标注.
 - 具名函数与匿名函数只在值位置与递归能力上不同, 类型均为 `Fn[[参数类型...] : 返回类型]`; 同一函数的参数名必须互不相同.
 - 允许 `@Let[f, @Fn[[...] : ..., 体]]` 绑定匿名函数; 该函数不能引用 `f`, 因此不自递归. 对非递归函数, `@Let[f, @Fn[...]]` 与 `@Def[f, ...]` 得到相同的函数值与函数类型, 区别仅在名字是否在函数体内可见; 递归定义只有 `@Def`, 独立定义或在 `@Fix` 中, 这一种方式.
-- Actor 蓝图: `@Handler[[self : Pid[...], 状态...] : R, 体]` 是表达式, 值类型为 `Handler[...]`; 求值只构造蓝图, 不执行体; 自循环用 `@Continue[新状态...]`, 主动停止用 `@Halt[]`, 不需要 Handler 名字; Handler 不可作为函数调用, 只能由 `@Spawn` 启动. 详细语义见第 13 节.
+- Actor 蓝图: `@Handler[[self : Pid[...], 状态...] : R, 体]` 是表达式, 值类型为 `Handler[...]`; 求值只构造蓝图, 不执行体; 自循环用 `@Continue[新状态...]`, 主动停机用 `@Halt[]`, 不需要 Handler 名字; Handler 不可作为函数调用, 只能由 `@Spawn` 启动. 详细语义见第 13 节.
 - 函数默认不允许前向引用; 互递归由 `@Fix` 表达.
 - `@Fix[定义, 定义, ...]`: 仅接受具名 `@Def`, 不产生新作用域; 组内名字相互可见, 定义本身进入当前作用域, 在 `@Fix` 之后的同块语句中可用, 随所在块结束而消失. 空 `@Fix[]` 视为 nil. 运行时机制为 `FixCell`: 预分配写一次的共享单元, 闭包捕获单元, 组求值完毕后回填终值.
 - `@Fix` 只接受函数定义, 递归值在语法上不可能出现, 不设运行时的未初始化值检查.
@@ -251,7 +251,7 @@ updated: 2026-11-14
 - 报告形态: `error[EXXXX]: 标题` 加具体消息与源码片段, 经 annotate-snippets 渲染; 渲染由库保证, 实现只须提供位置与消息.
 - 内置错误, 包括类型错误, 溢出与未绑定名字等, 不可恢复, 不可由语言机制捕获; 可能的失败以 `Result` 表达, 可能的缺失以 `Option` 表达. 不设异常机制, `Catch` 与 `Throw` 不存在.
 - 错误作用域: 普通 Actor 内的运行时错误只终止该 Actor, 诊断照常输出; 程序根内的运行时错误终止整个程序. 顶层语句是 Actor 之外的 Prelude, `@Main` 是程序的根 Actor, 两者出错都终止程序.
-- 退出原因: 内置 Data 类型 `ExitReason`, 变体为 `Halted[]` 主动停止, `Killed[]` 被强杀, `Failed[编号 : i64, 说明 : string]` 运行时错误; 编号为稳定身份, 供程序判别, 说明为给人看的文本, 说明不作为判别依据.
+- 退出原因: 内置 Data 类型 `ExitReason`, 变体为 `Halted[]` 已停机, `Killed[]` 被强杀, `Failed[编号 : i64, 说明 : string]` 运行时错误; 编号为稳定身份, 供程序判别, 说明为给人看的文本, 说明不作为判别依据.
 - 领域错误由 Data 值承担, 可失败操作的返回类型使用 `Result[T, E]`. 内置 `IOError` 覆盖文件, 目录与标准输入的常见失败; 其余操作按实际种类扩充. 解析类错误的负载直接用 string, 不设 `ParseError`; 时间族的失败原因另设内置 Data 类型 `TimeError`, 见 4.7 节. `Option` 与 `Result` 的构造器, 即 `Option/Some`, `Option/None`, `Result/Ok`, `Result/Err`, 可在源码中构造, 属内置泛型构造器, 与用户 `Data` 构造器同形.
 - 所有任务都在等待且无 I/O 与定时器时, 调度器报告 `Deadlock` 运行时错误.
 - 用户主动中断: 四个特殊形式供程序显式声明失败, 信息字符串不可省略. `@Assert[条件 : bool, 信息 : string]` 条件为真则通过并给出 nil, 为假则断言失败; 通过时执行继续, 故其类型不是 never, "不可达分支" 的意图用 `@Unreachable` 表达; `@Panic[信息 : string]`, `@Todo[信息 : string]` 与 `@Unreachable[信息 : string]` 类型为 never, 执行到即失败. 后三者同属"用户主动中断"一族, 但在错误目录里各自独立, 报告时能看出类别; 断言单独成类. 断言的信息字符串只在失败路径求值. 失败不可恢复, 作用域与其它运行时错误一致: actor 内只终止该 actor, 退出原因为 `Failed[编号, 说明]`, 说明即错误标题; 程序根内终止程序.
@@ -276,23 +276,23 @@ updated: 2026-11-14
 - typed IR 采用类型制导降级: 检查器产出以 `(SourceId, NodeId)` 为键的类型表, 降级器消费该表, 产出只保留表示决策与函数签名的 IR; 运行时 `Value` 只承载表示类别, 不承载完整静态类型. 类型信息落在绑定者, 即函数签名, `Let` 绑定目标, 续延参数与模式字段绑定, 不给每个值槽重复标注; IR 采用 CPS 形态, 复合值都经绑定或续延参数, 绑定者带类型即可覆盖, 标量字面值则由枚举变体自描述. 类型制导操作, 例如列表操作, 在操作节点自身携带完整 `Type`. NodeId 在解析期为每个 `Spanned` 节点分配, 只承担类型表的节点身份, 用户可见诊断仍只用 `Span`.
 - 尾调用由 CPS 直接表达.
 - CPS IR: `cps/ir.rs` 把检查后的 AST 降级为函数级 CPS 形式, 每个函数带续延参数 `$k`, 尾调用, 普通调用, 续延绑定, `receive` 挂起点与 `continue` 均显式可见. 该树形形态是线性化的输入, `ksl cps` 输出它供调试. IR 节点保留源码区间供运行时错误定位.
-- 线性 IR: `cps/linear` 把 CPS 树线性化为基本块, 每个块带参数, 顺序指令与唯一终止指令; `Instr` 覆盖绑定, 顶层绑定与递归绑定, `Terminator` 覆盖返回, 跳转, 调用, 原语, 接收, 分支与 Actor 终止. 线性化后完成闭包转换: 分析函数自由变量, 计算基本块活跃变量, 把变量引用解析为槽位或捕获下标, 跳转与调用显式传递活跃参数; 续延是目标基本块, 运行时以槽位与捕获下标取值, 不维护名字环境与续延表. 自由变量分析对函数引用取传递闭包: 函数值的自由变量在被引用处展开, 再按该处的绑定集合过滤, 引用链成环时迭代到不动点. 块内指令连续执行, 到终止指令或预算耗尽时回到调度器; 超长基本块不会独占调度. `ksl linear` 输出该形态. 线性执行器是唯一后端.
+- 线性 IR: `cps/linear` 把 CPS 树线性化为基本块, 每个块带参数, 顺序指令与唯一终止指令; `Instr` 覆盖绑定, 顶层绑定与递归绑定, `Terminator` 覆盖返回, 跳转, 调用, 原语, 接收, 分支与 Actor 终止. 线性化后完成闭包转换: 分析函数自由变量, 计算基本块活跃变量, 把变量引用解析为槽位或捕获下标, 跳转与调用显式传递活跃参数; 续延是目标基本块, 运行时以槽位与捕获下标取值, 不维护名字环境与续延表. 自由变量分析对函数引用取传递闭包: 函数值的自由变量在被引用处展开, 再按该处的绑定集合过滤, 引用链成环时迭代到不动点. 块内指令连续执行, 到终止指令或预算耗尽时回到调度器; 超长基本块不会独占调度. 同函数块切换原地复用槽位缓冲; 被调静态已知的内置纯函数调用不建续延帧, 直接完成调用并把结果送入目标块. `ksl linear` 输出该形态. 线性执行器是唯一后端.
 - 编译期栈安全: CPS 降级按语句序列回卷, 自由变量分析与线性化使用显式工作栈, 释放 CPS 树时逐节点展开; 长列表字面量与长语句序列不随长度加深调用栈.
 - IR 命名: 源码标识符, 函数名, Data 类型与变体名, 模式字段直接使用驻留 `Symbol`; 合成临时值与续延使用单调编号 `TempId` 与 `ContId`, 不进入驻留表; 函数表以 `Symbol` 为键, 显示时解析回文本. 入口函数使用源码不可表达的 `$main`, 避免与用户函数同名. 运行时全局环境仍只为源码名建索引, 合成临时值存放在执行作用域的独立持久化映射中.
-- 环回收: 常规释放由 `Arc` 引用计数完成, 显式标记清扫只处理不可达环. 依据是不可变容器值与标量无法独立成环, 任何环都经过 `Closure` 的捕获向量或 `ActorHandle` 的信箱和结果; 清扫对不可达闭包清空捕获, 对不可达 Actor 句柄清空信箱与结果, 环被截断后由引用计数释放. 捕获向量用可清空的内部结构保存, Actor 句柄的信箱与结果本身已同步. 候选对象以弱引用登记, 标记从调度器状态, 模块缓存导出值与宿主额外根出发. REPL 每次输入开始时收集; 调度器循环顶部在新登记候选对象达到默认 4096 时收集, 阈值可调, 0 关闭自动收集. 执行中途收集使用额外根栈: 回滚快照, 模块基环境与已执行模块的导出值由执行器成对压入与弹出, 避免只存在于 Rust 栈上的值被误清. 不做移动或压缩, `Value` 表示不变; I/O 任务只携带内部结果与字节数据, 不捕获任意用户 `Value`.
+- 环回收: 常规释放由 `Arc` 引用计数完成, 显式标记清扫只处理不可达环. 依据是不可变容器值与标量无法独立成环, 任何环都经过 `Closure` 的捕获向量或 `ActorHandle` 的信箱和结果; 清扫对不可达闭包清空捕获, 对不可达 Actor 句柄清空信箱与结果, 环被截断后由引用计数释放. 捕获向量用可清空的内部结构保存, Actor 句柄的信箱与结果本身已同步. 候选对象以弱引用登记, 标记从调度器状态, 模块缓存导出值与宿主额外根出发. REPL 每次输入开始时收集; 调度器循环顶部在新登记候选对象达到阈值时收集, 阈值默认 4096 并随存活候选规模自适应上调, 实际触发值不低于两者较大者, 阈值可调, 0 关闭自动收集. 执行中途收集使用额外根栈: 回滚快照, 模块基环境与已执行模块的导出值由执行器成对压入与弹出, 避免只存在于 Rust 栈上的值被误清. 不做移动或压缩, `Value` 表示不变; I/O 任务只携带内部结果与字节数据, 不捕获任意用户 `Value`.
 - 网络 I/O: 单个网络事件线程持有全部 TCP 套接字, 语言层句柄只保存令牌, 对端地址与关闭标志; 会等待的网络原语提交操作后挂起 Actor, 完成经既有 I/O 完成通道返回. 事件线程用非阻塞套接字与轮询器处理监听, 接受, 连接, 读写与截止时刻; `SocketClose` 与句柄释放提交关闭命令, 注销注册并以 `SocketError/Closed` 唤醒挂起操作; 调度器终止等待中的 Actor 时提交取消命令, 注销对应操作. 监听器只接受显式 IP 字面量; 主机名解析与 TLS 不在当前范围内.
 
 ## 11. 启动形态
 
-- 命令行以子命令组织, 参数解析由 `ksl-cli` 自行实现, 帮助与错误信息使用中文: `ksl` 无参数显示帮助; `ksl repl [初始化文件]` 进入交互模式, 给定初始化文件时先加载该文件作为主模块再进入交互, 加载出错时报错并进入空环境的交互; `ksl repl --code <代码>` 在进入交互前执行一段代码; `ksl run <文件>` 执行脚本后退出, `ksl run --code <代码>` 直接执行代码; `ksl lex`, `ksl ast`, `ksl check`, `ksl cps`, `ksl linear` 输出各阶段中间结果; `ksl lsp` 启动语言服务器, 通过标准输入输出走 LSP; 源文件扩展名 `.ksl`. 不支持直接把文件作为首参数, 也不根据扩展名推断子命令. `ksl cps` 输出树形 CPS IR, `ksl linear` 输出线性化基本块 IR.
+- 命令行以子命令组织, 参数解析由 `ksl-cli` 自行实现, 帮助与错误信息使用中文: `ksl` 无参数显示帮助; `ksl repl [初始化文件]` 进入交互模式, 给定初始化文件时先加载该文件作为主模块再进入交互, 加载出错时报错并进入空环境的交互; `ksl repl --code <代码>` 在进入交互前执行一段代码; `ksl run <文件>` 执行脚本后退出, `ksl run --code <代码>` 直接执行代码; `run` 与 `repl` 接受 `--io-workers <数量>` 指定阻塞 I/O 工作线程数; `ksl lex`, `ksl ast`, `ksl check`, `ksl cps`, `ksl linear` 输出各阶段中间结果; `ksl lsp` 启动语言服务器, 通过标准输入输出走 LSP; 源文件扩展名 `.ksl`. 不支持直接把文件作为首参数, 也不根据扩展名推断子命令. `ksl cps` 输出树形 CPS IR, `ksl linear` 输出线性化基本块 IR.
 - 程序退出: 程序入口结束后, 未被显式 Join 的存活 Actor 由运行时强制终止. 入口是根模块的 `@Main`; 没有 `@Main` 时是顶层语句. 退出码 0 表示正常, 1 表示错误终止, `@Exit[code]` 可指定其他退出码; 命令行用法错误由参数解析器处理, 退出码 2, 与语言退出码无关.
 - 错误报告: 各阶段错误带源码位置, 经 annotate-snippets 渲染输出到标准错误; 脚本遇首个错误即终止, REPL 出错不退出会话.
 - LSP: `ksl lsp` 通过标准输入输出通信, 全量文本同步, 发布首个类型检查或加载错误; 位置按 UTF-16 code unit 换算, 并提供顶层 Data, 函数与绑定的文档符号.
 - REPL: 交互编辑器是终端会话的客户端, 从服务接收按键, 粘贴与尺寸事件, 不自行管理 raw mode 与事件源; 环境跨输入行持久; 求值期间调用 `ReadLine` 时, `ReadLine` 的提示照常写出并从同一标准输入读取下一行, REPL 不在这期间显示下一轮提示符; 程序输出与后续提示符不重叠; 程序输入优先, REPL 不抢占进行中的程序读取; 每次输入按两阶段提交, 类型检查在会话副本上进行, 运行成功后才提交类型环境, 运行失败时抽象机回滚全局绑定, 出错不留下半程状态; 每次输入结束时类型变量必须全部解析为具体类型, 不允许把未定类型带入下一次输入; 结果统一以 `<编号>= ` 前缀显示, nil 也显示; 不可打印类型显示尖括号类型摘要, 例如 `<Shape>`; 顶层绑定存于全局环境, 批处理与交互共用一条执行路径.
-- REPL 命令以 `%` 开头, 不属于语言语法, 只在交互模式生效; `%help` 显示命令, `%type <表达式>` 只做类型检查且不执行, `%bindings` 列出全局绑定, `%reset` 清空会话状态, `%quit` 退出. 命令不设简写. 命令输出与求值结果分开显示, `%type` 采用 `表达式 : 类型` 形式.
-- REPL 使用内置行编辑器, 不依赖第三方行编辑库. 输入采用多行缓冲: 段内任意行可编辑, 编辑中以 `n$ ` 提示焦点行, 其余行按位置显示 `n> ` 与 `n| `, 接受或结束后回显固定回位置提示符, 不再保留编辑状态; 超出终端高度时按视口窗口显示, 焦点行始终可见. Enter 在输入完整时整段提交, 否则在光标处拆行续输; Backspace 在焦点行行首合并上一行, Ctrl-D 在焦点行行尾合并下一行, 末尾空行上的 Ctrl-D 删除该空行, 唯一空行上的 Ctrl-D 结束输入. 键位为 Emacs 子集: `Ctrl-A/E/B/F` 行内移动, `Ctrl-P/N` 在行间转移编辑焦点, `Ctrl-K/U/W/Y` 行内杀/粘贴, `Ctrl-D`, `Ctrl-C`, `Ctrl-L`, `Home/End`, 方向键, `Backspace/Delete`; 方向键上下选择历史, 仅单行输入时可用; 不提供补全, 灰字提示, 撤销与反向搜索. Tab 按键忽略: 语言没有缩进语义且补全尚未提供, 按下 Tab 不写入任何空白; 粘贴内容中的 tab 仍按文本处理, 绘制时展开为制表位. 高亮按语言词法器计算: 数值与字符串字面量, 内置函数, 保留名与注释各有配色; `@` 与 `^` 前缀记号随保留名配色, 受限名字按词法位置区分——斜杠前的类型限定部分随保留名配色, 斜杠同色以保持名字为一个视觉单元, 斜杠后的构造器与变体名单独配色, 模式中省略类型限定的 `/Variant` 同样命中. 光标落在括号上或紧邻其右侧时, 该括号与其配对一并强调, 没有配对时报错色; 配对查找只走词法记号, 字符串与注释里的括号不参与, 且只跟随焦点行的光标. 历史仅保存在内存, 整段输入登记为一条. 终端 `ReadLine` 复用单行编辑器 `LineEditor`, 键位处理与单行布局相同, 只去掉历史, 高亮, 多行与续行. `LineEditor` 与 REPL 的 `BufferEditor` 共享 `KeyTarget` 键位映射, 只在编辑目标上区分单行与多行; 多行拆分, 焦点转移, 历史与高亮不属于共享核心.
+- REPL 命令以 `%` 开头, 不属于语言语法, 只在交互模式生效; `%help` 显示命令, `%type <表达式>` 检查表达式类型, `%bindings` 列出全局绑定, `%reset` 清空会话状态, `%quit` 退出. 命令不设简写. 命令输出与求值结果分开显示, `%type` 采用 `表达式 : 类型` 形式.
+- REPL 使用内置行编辑器, 不依赖第三方行编辑库. 输入采用多行缓冲: 段内任意行可编辑, 编辑中以 `n$ ` 提示焦点行, 其余行按位置显示 `n> ` 与 `n| `, 接受或结束后回显固定回位置提示符, 不再保留编辑状态; 超出终端高度时按视口窗口显示, 焦点行始终可见. Enter 在输入完整时整段提交, 否则在光标处拆行续输; Backspace 在焦点行行首合并上一行, Ctrl-D 在焦点行行尾合并下一行, 末尾空行上的 Ctrl-D 删除该空行, 唯一空行上的 Ctrl-D 结束输入. 键位为 Emacs 子集: `Ctrl-A/E/B/F` 行内移动, `Ctrl-P/N` 在行间转移编辑焦点, `Ctrl-K/U/W/Y` 行内杀/粘贴, `Ctrl-D`, `Ctrl-C`, `Ctrl-L`, `Home/End`, 方向键, `Backspace/Delete`; 方向键上下选择历史, 仅单行输入时可用; 不提供补全, 灰字提示, 撤销与反向搜索. Tab 按键忽略: 语言没有缩进语义且补全尚未提供, 按下 Tab 不写入任何空白; 粘贴内容中的 tab 仍按文本处理, 绘制时展开为制表位. 高亮按语言词法器计算: 数值与字符串字面量, 内置函数, 保留名与注释各有配色; `@` 与 `^` 前缀记号随保留名配色, 受限名字按词法位置区分: 斜杠前的类型限定部分随保留名配色, 斜杠同色以保持名字为一个视觉单元, 斜杠后的构造器与变体名单独配色, 模式中省略类型限定的 `/Variant` 同样命中. 光标落在括号上或紧邻其右侧时, 该括号与其配对一并强调, 没有配对时报错色; 配对查找只走词法记号, 字符串与注释里的括号不参与, 且只跟随焦点行的光标. 历史仅保存在内存, 整段输入登记为一条. 终端 `ReadLine` 复用单行编辑器 `LineEditor`, 键位处理与单行布局相同, 只去掉历史, 高亮, 多行与续行. `LineEditor` 与 REPL 的 `BufferEditor` 共享 `KeyTarget` 键位映射, 只在编辑目标上区分单行与多行; 多行拆分, 焦点转移, 历史与高亮不属于共享核心.
 - 交互模式的提示符为 `n> `, 编辑中焦点行为 `n$ `, 其余续行为 `n| `, 结果为 `n= `; 接受后的回显统一显示 `n> ` 与 `n| `. `n` 在同一段输入中相同. 编号每次非空输入都前进, 失败与 REPL 命令同样占编号, 空行不占; 编号只用于标记, 不参与语义. 命令行代码算作一次输入, 占用第一个编号.
-- 程序输出在交互模式的求值期间立即写出并冲刷, 终端上不滞留, 因此先提示再读输入的程序能立刻看到提示. 核心记录输出是否停在行首, 轮末若不在行首则补一个换行, 使 `n= ` 独占一行, 例如 `PrintRaw["B"]; 12` 显示为 `B` 与 `1= 12` 两行. 该记录是进程级的: 提示一类写出发生在 I/O 工作线程上, 同样计入. 失败的输入没有结果标签, 补的换行使错误报告另起一行.
+- 程序输出在交互模式的求值期间立即写出并冲刷, 终端上不滞留, 因此先提示再读输入的程序能立刻看到提示. 核心记录输出是否停在行首, 轮末若不在行首则补一个换行, 使 `n= ` 独占一行, 例如 `PrintRaw["B"]; 12` 显示为 `B` 与 `1= 12` 两行. 该记录是进程级的: 提示一类写出发生在 I/O 工作线程上, 同样计入; 标准输出为终端时, 终端行规程对按行读取输入的显示也计入. 失败的输入没有结果标签, 补的换行使错误报告另起一行.
 - 交互模式以空白行分隔区块: 输入回显, 程序输出, 结果标签或诊断, 下一轮提示符两两之间各固定一个空白行; 标准输出与标准错误按到达顺序混排显示, 不分区; 空行输入同样只留一个空白行; 管道模式不加空白行, 输出保持干净.
 - 非终端输入 (例如管道或测试脚本) 由编辑器的逐行读取路径处理: 不打印提示符, 不读键位, 仍按同一个 `complete` 判定把多行累加成一段完整输入; 管道与终端两条路径共用同一套求值与提交逻辑, 结果同样带 `<编号>= ` 标签.
 - REPL 加载初始化文件时只执行顶层语句并保留主文件 `@Export` 的绑定, 不执行 `@Main`, 不显示主函数结果, `Print` 输出照常; 未导出的顶层名字只作为主文件内部实现. 加载与交互求值的显示策略分离. 加载出错只影响当次加载, 会话继续.
@@ -308,6 +308,7 @@ updated: 2026-11-14
 - 有序映射使用 indexmap: Data 类型表与 Data 收集阶段按声明顺序保存, 使遍历顺序与首个错误选择可复现. 需要结构共享的会话状态使用 imbl 持久化映射: 类型表, 检查环境作用域与模块缓存外层; 其余只做查找或成员判断的表用 HashMap. 编译器保持 fail-fast.
 - 许可证采用 AGPL-3.0-or-later.
 - clippy 严格检查, clippy.toml 放宽对测试代码的约束, 问题优先自动修复.
+- release 构建启用 fat LTO 与单 codegen unit, 以构建时间换运行时性能.
 - rustfmt 启用 Nightly 不稳定选项.
 - 测试遵循最小原则, 仅作为排错手段, 不以数量作为指标.
 - 代码优先级: 可维护性 > 可读性 > 性能, 非优化阶段不做性能取舍.
@@ -371,7 +372,10 @@ updated: 2026-11-14
 ## 15. 网络
 
 - TCP 以不透明句柄 `TcpListener` 与 `Socket` 表示. `Socket` 是已连接的字节流, 后续 TLS 连接复用同一句柄类型; 当前只支持明文 TCP 与 IPv4/IPv6 字面量地址, 不做主机名解析.
-- 原语: `TcpListen[host, port]`, `TcpAccept[listener, timeout]`, `TcpConnect[host, port, timeout]`, `TcpCloseListener[listener]`, `TcpLocalPort[listener]`, `SocketPeer[socket]`, `SocketRead[socket, max, timeout]`, `SocketReadExact[socket, count, timeout]`, `SocketReadAll[socket, max, timeout]`, `SocketReadLine[socket, max, timeout]`, `SocketWrite[socket, bytes, timeout]`, `SocketWriteAll[socket, bytes, timeout]`, `SocketWriteLine[socket, text, timeout]` 与 `SocketClose[socket]`.
+- 原语: `TcpListen[host, port]`, `TcpAccept[listener, timeout]`, `TcpConnect[host, port, timeout]`, `TcpCloseListener[listener]`, `TcpLocalPort[listener]`, `SocketPeer[socket]`, `SocketIsClosed[socket]`, `SocketRead[socket, max, timeout]`, `SocketReadExact[socket, count, timeout]`, `SocketReadAll[socket, max, timeout]`, `SocketReadLine[socket, max, timeout]`, `SocketWrite[socket, bytes, timeout]`, `SocketWriteAll[socket, bytes, timeout]`, `SocketWriteLine[socket, text, timeout]`, `SocketShutdownWrite[socket]` 与 `SocketClose[socket]`.
+- 关闭状态: `SocketIsClosed[socket] -> bool` 反映句柄是否已关闭, 包括经 `SocketClose` 与句柄释放触发的关闭.
+- 半关闭: `SocketShutdownWrite[socket] -> Result[nil, SocketError]` 关闭写侧, 对端读到 EOF, 读侧保持打开; 用于发完请求后等待回复的协议形态.
+- 延迟: 接受与连接的流默认开启 TCP_NODELAY, 交互式协议的小写入不被 Nagle 算法合并延迟.
 - `TcpListen` 的 `port` 为 0 时由宿主分配临时端口, `TcpLocalPort` 返回实际端口.
 - 可失败的套接字操作返回 `Result[T, SocketError]`. `SocketError` 与 `IOError` 分开: 前者覆盖网络连接, 地址, 超时, 行协议与关闭, 后者保持文件与终端语义. 变体为 `TimedOut`, `InvalidArgument[string]`, `ConnectionRefused`, `ConnectionReset`, `ConnectionClosed`, `Closed`, `AddrInUse`, `AddrNotAvailable`, `PermissionDenied`, `InvalidUtf8`, `LineTooLong`, `TooLarge`, `UnexpectedEof` 与 `Other[string]`; `Closed` 表示本地句柄已关闭, `ConnectionClosed` 表示对端在写操作中关闭.
 - 超时参数为 `u64` 毫秒, 0 表示立即尝试一次, 正数表示最多等待; 网络操作不提供无限等待. `SocketReadAll`, `SocketReadExact` 与 `SocketReadLine` 的超时按底层每次等待计算, 单次操作的总耗时不受固定上限约束. 不等待的操作, 即 `TcpListen`, `TcpCloseListener`, `TcpLocalPort`, `SocketPeer` 与 `SocketClose`, 不带超时参数.
@@ -380,4 +384,4 @@ updated: 2026-11-14
 - 并发: 每个 Actor 同时只能挂起一个 I/O 操作, 因此同一 Actor 不能同时等套接字读与读信箱. 惯用法是读 Actor 与写 Actor 分离, 由协调者 Actor 接收事件; 套接字句柄可以在 Actor 之间传递, 读写可同时挂起.
 - `@Main` 不能使用 `@Continue`, 而嵌套 `@Def` 不继承 Actor 上下文; 需要循环处理连接或消息时, 使用 `@Handler` 并在体内 `@Continue`, 由 `@Main` spawn 后 `@Join`.
 - 内置只提供字节流与行原语; 长度前缀分帧, 聊天协议与未来的节点协议以 `.ksl` 模块或示例实现, 不引入独立标准库与模块搜索路径.
-- 当前不支持 UDP, TLS, 主机名解析, 半关闭, `@Select` 以及透明跨进程 Pid; 这些能力在此层之上或之后的阶段扩展.
+- 当前不支持 UDP, TLS, 主机名解析, `@Select` 以及透明跨进程 Pid; 这些能力在此层之上或之后的阶段扩展.

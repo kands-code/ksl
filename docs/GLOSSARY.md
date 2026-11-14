@@ -47,18 +47,24 @@ updated: 2026-11-14
 | Socket                      | -    | 套接字             | 是           | 内置不透明类型, 已连接的字节流句柄                                |
 | TcpListener                 | -    | TCP 监听器         | 是           | 内置不透明类型, 接受 TCP 连接的句柄                               |
 | SocketError                 | -    | 套接字错误         | 是           | 内置 Data 类型, 网络操作的可恢复失败                              |
+| TCP_NODELAY                 | -    | -                  | 是           | 禁用 Nagle 算法的套接字选项, 接受与连接的流默认开启               |
+| Half-Close                  | -    | 半关闭             | 是           | 关闭写侧而保持读侧打开                                            |
 | Network Event Thread        | -    | 网络事件线程       | 否           | 持有非阻塞套接字并驱动读写与超时的宿主线程                        |
 | Wall-Clock Time             | -    | 实际耗时; 本地时间 | 是           | 按语境选择译名, 不使用直译行话                                    |
 | TimeError                   | -    | 时间错误           | 是           | 内置 Data 类型                                                    |
 | KeyEvent                    | -    | 按键事件           | 是           | 内置 Data 类型, 终端按键的表示                                    |
 | Raw Mode                    | -    | 原始模式           | 是           | 终端输入模式, 关闭行缓冲与回显                                    |
-| Halt                        | -    | 主动停止           | 是           | Actor 主动停止的特殊形式                                          |
-| Halted                      | -    | 已停止             | 是           | ExitReason 变体                                                   |
+| Halt                        | -    | 主动停机           | 是           | Actor 主动停机的特殊形式, 借自 Erlang 的 halt                     |
+| Halted                      | -    | 已停机             | 是           | ExitReason 变体                                                   |
 | Monitor                     | -    | 监视               | 是           | Actor 终止通知特殊形式                                            |
 | Unmonitor                   | -    | 取消监视           | 是           | 注销监视的特殊形式                                                |
 | PidSerial                   | -    | Pid 编号           | 是           | 调度器内 Actor 编号特殊形式                                       |
 | SetTimer                    | -    | 延迟投递           | 是           | 延迟发送消息的特殊形式                                            |
 | CancelTimer                 | -    | 取消定时           | 是           | 取消未触发延迟消息的特殊形式                                      |
+| Mailbox                     | -    | 信箱               | 是           | Actor 的消息队列, Erlang 借用词                                   |
+| Kill                        | -    | 强杀               | 是           | @Kill 强制终止 Actor, Erlang 借用词                               |
+| Killed                      | -    | 被强杀             | 是           | ExitReason 变体                                                   |
+| Supervisor                  | -    | 监督者             | 是           | 经监视与重启策略管理子 Actor 的库层角色                           |
 | Type Erasure                | -    | 类型擦除           | 是           | 运行时值不携带完整静态类型                                        |
 | Narrow Representation       | -    | 窄表示             | 是           | 按元素类型使用紧凑存储的列表表示                                  |
 | LSP                         | -    | -                  | 是           | Language Server Protocol                                          |

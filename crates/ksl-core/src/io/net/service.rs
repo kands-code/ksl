@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::net::SocketAddr;
+use std::net::{Shutdown, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -97,6 +97,15 @@ pub(super) fn submit(task: NetTask, op_id: u64, cancel: Arc<AtomicBool>, done: D
                 all,
                 timeout,
                 cancel,
+            }
+        },
+        NetTask::ShutdownWrite { socket } => {
+            if socket.is_closed() {
+                done(Ok(result_err(SocketError::Closed.to_value())));
+                return;
+            }
+            CommandKind::ShutdownWrite {
+                token: socket.token(),
             }
         },
     };
@@ -213,6 +222,9 @@ enum CommandKind {
     Cancel {
         op_id: u64,
     },
+    ShutdownWrite {
+        token: usize,
+    },
 }
 
 struct Request {
@@ -311,22 +323,57 @@ struct StreamState {
     socket: TcpStream,
     peer: String,
     read_buffer: Vec<u8>,
+    /// 已消费前缀长度; 读缓冲的有效内容从该下标开始.
+    read_start: usize,
     eof: bool,
     reads: VecDeque<u64>,
     writes: VecDeque<u64>,
     registered: bool,
 }
 
+/// 读缓冲压缩阈值: 已消费前缀达到该值时在下次读入前压缩.
+const READ_BUFFER_COMPACT: usize = 8192;
+
 impl StreamState {
     fn new(socket: TcpStream, peer: String) -> Self {
+        // 交互式协议的小写入对延迟敏感, 接受与连接的流一律禁用 Nagle 算法;
+        // 设置失败只损失延迟优化, 不影响正确性.
+        let _ = socket.set_nodelay(true);
         Self {
             socket,
             peer,
             read_buffer: Vec::new(),
+            read_start: 0,
             eof: false,
             reads: VecDeque::new(),
             writes: VecDeque::new(),
             registered: false,
+        }
+    }
+
+    /// 已缓冲未消费的字节数.
+    fn buffered(&self) -> usize {
+        self.read_buffer.len() - self.read_start
+    }
+
+    /// 未消费的缓冲内容.
+    fn buffer(&self) -> &[u8] {
+        &self.read_buffer[self.read_start..]
+    }
+
+    /// 消费前 `count` 个已缓冲字节.
+    fn consume(&mut self, count: usize) {
+        self.read_start += count;
+    }
+
+    /// 读入新数据前压缩已消费前缀; 全部消费时直接清空.
+    fn compact_read_buffer(&mut self) {
+        if self.read_start == self.read_buffer.len() {
+            self.read_buffer.clear();
+            self.read_start = 0;
+        } else if self.read_start >= READ_BUFFER_COMPACT {
+            self.read_buffer.drain(..self.read_start);
+            self.read_start = 0;
         }
     }
 }
@@ -486,6 +533,19 @@ impl NetLoop {
             },
             CommandKind::Close { token } => self.close_source(token),
             CommandKind::Cancel { op_id } => self.cancel_op(op_id),
+            CommandKind::ShutdownWrite { token } => {
+                let Some(done) = done.take() else {
+                    return;
+                };
+                let Some(Source::Stream(state)) = self.sources.get_mut(&token) else {
+                    done(Ok(result_err(SocketError::Closed.to_value())));
+                    return;
+                };
+                match state.socket.shutdown(Shutdown::Write) {
+                    Ok(()) => done(Ok(result_ok(Value::Nil))),
+                    Err(error) => done(Ok(result_err(from_io(&error).to_value()))),
+                }
+            },
         }
     }
 
@@ -1134,6 +1194,7 @@ fn try_read(state: &mut StreamState, op: &mut Op) -> ReadOutcome {
         if state.eof {
             return eof_read(state, mode, max);
         }
+        state.compact_read_buffer();
         let mut buffer = [0_u8; 8192];
         match state.socket.read(&mut buffer) {
             Ok(0) => {
@@ -1155,31 +1216,31 @@ fn try_read(state: &mut StreamState, op: &mut Op) -> ReadOutcome {
 fn satisfy_read(state: &mut StreamState, mode: ReadMode, max: usize) -> Option<ReadOutcome> {
     match mode {
         ReadMode::Read => {
-            if state.read_buffer.is_empty() {
+            if state.buffered() == 0 {
                 None
             } else {
-                let count = max.min(state.read_buffer.len());
+                let count = max.min(state.buffered());
                 Some(ReadOutcome::Complete(option_some(bytes_value(take_bytes(
                     state, count,
                 )))))
             }
         },
         ReadMode::Exact => {
-            if state.read_buffer.len() >= max {
+            if state.buffered() >= max {
                 Some(ReadOutcome::Complete(bytes_value(take_bytes(state, max))))
             } else {
                 None
             }
         },
         ReadMode::All => {
-            if state.read_buffer.len() > max {
+            if state.buffered() > max {
                 Some(ReadOutcome::Error(SocketError::TooLarge))
             } else {
                 None
             }
         },
         ReadMode::Line => {
-            if let Some(position) = state.read_buffer.iter().position(|byte| *byte == b'\n') {
+            if let Some(position) = state.buffer().iter().position(|byte| *byte == b'\n') {
                 if position > max {
                     return Some(ReadOutcome::Error(SocketError::LineTooLong));
                 }
@@ -1187,7 +1248,7 @@ fn satisfy_read(state: &mut StreamState, mode: ReadMode, max: usize) -> Option<R
                     Ok(value) => Some(ReadOutcome::Complete(value)),
                     Err(error) => Some(ReadOutcome::Error(error)),
                 }
-            } else if state.read_buffer.len() > max {
+            } else if state.buffered() > max {
                 Some(ReadOutcome::Error(SocketError::LineTooLong))
             } else {
                 None
@@ -1200,24 +1261,24 @@ fn eof_read(state: &mut StreamState, mode: ReadMode, max: usize) -> ReadOutcome 
     match mode {
         ReadMode::Read => ReadOutcome::Complete(option_none()),
         ReadMode::Exact => {
-            if state.read_buffer.len() >= max {
+            if state.buffered() >= max {
                 ReadOutcome::Complete(bytes_value(take_bytes(state, max)))
             } else {
                 ReadOutcome::Error(SocketError::UnexpectedEof)
             }
         },
         ReadMode::All => {
-            if state.read_buffer.len() > max {
+            if state.buffered() > max {
                 ReadOutcome::Error(SocketError::TooLarge)
             } else {
-                ReadOutcome::Complete(bytes_value(std::mem::take(&mut state.read_buffer)))
+                ReadOutcome::Complete(bytes_value(take_remainder(state)))
             }
         },
         ReadMode::Line => {
-            if state.read_buffer.is_empty() {
+            if state.buffered() == 0 {
                 ReadOutcome::Complete(option_none())
             } else {
-                let bytes = std::mem::take(&mut state.read_buffer);
+                let bytes = take_remainder(state);
                 match line_value(bytes) {
                     Ok(value) => ReadOutcome::Complete(value),
                     Err(error) => ReadOutcome::Error(error),
@@ -1228,7 +1289,17 @@ fn eof_read(state: &mut StreamState, mode: ReadMode, max: usize) -> ReadOutcome 
 }
 
 fn take_bytes(state: &mut StreamState, count: usize) -> Vec<u8> {
-    state.read_buffer.drain(..count).collect()
+    let bytes = state.buffer()[..count].to_vec();
+    state.consume(count);
+    bytes
+}
+
+/// 取走全部未消费缓冲并清空读缓冲.
+fn take_remainder(state: &mut StreamState) -> Vec<u8> {
+    let bytes = state.buffer().to_vec();
+    state.read_buffer.clear();
+    state.read_start = 0;
+    bytes
 }
 
 fn bytes_value(bytes: Vec<u8>) -> Value {

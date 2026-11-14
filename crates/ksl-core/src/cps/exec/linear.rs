@@ -9,6 +9,7 @@ use std::sync::{Arc, OnceLock};
 
 use super::eval::closure_linear;
 use super::{Control, Kont, LinearFrame, LinearState, Machine};
+use crate::builtin;
 use crate::cps::gc::GcRegistry;
 use crate::cps::ir::PatternIr;
 use crate::cps::linear::{
@@ -19,44 +20,53 @@ use crate::error::RuntimeError as Error;
 use crate::symbol::Symbol;
 use crate::value::{Capture, Env, ExitReason, FixCell, Value, data_value};
 
-/// 进入基本块: 参数占据前若干连续槽位.
-pub(super) fn enter_block(
-    function: Arc<LinearFunction>,
-    block: BlockId,
-    args: Vec<Value>,
-    captures: Arc<[Capture]>,
-    functions: Arc<LinearFunctions>,
-) -> LinearState {
-    let target = &function.blocks[block.index() as usize];
-    debug_assert_eq!(args.len(), target.param_count, "基本块参数个数不符");
-    let mut locals = vec![None; target.slots.len()];
-    for (slot, value) in args.into_iter().enumerate() {
-        locals[slot] = Some(value);
-    }
-    LinearState {
-        function,
-        block,
-        instr: 0,
-        locals,
-        captures,
-        functions,
-    }
-}
-
-/// 由全局环境取主函数捕获值; 缺失的绑定留空, 首次读取时报错.
-pub(super) fn capture_values(globals: &Env, names: &[Symbol]) -> Arc<[Capture]> {
-    names
-        .iter()
-        .map(|name| {
-            globals
-                .get(name)
-                .cloned()
-                .map_or(Capture::Missing(*name), Capture::Value)
-        })
-        .collect()
-}
+/// 槽位缓冲池的上限; 超出上限的缓冲直接释放, 避免深调用后长期占用大缓冲.
+const LOCALS_POOL_CAP: usize = 16;
 
 impl Machine {
+    /// 进入基本块: 参数占据前若干连续槽位; 槽位缓冲优先从池中复用.
+    pub(super) fn enter_block(
+        &mut self,
+        function: Arc<LinearFunction>,
+        block: BlockId,
+        args: Vec<Value>,
+        captures: Arc<[Capture]>,
+        functions: Arc<LinearFunctions>,
+    ) -> LinearState {
+        let target = &function.blocks[block.index() as usize];
+        debug_assert_eq!(args.len(), target.param_count, "基本块参数个数不符");
+        let mut locals = self.take_locals(target.slots.len());
+        for (slot, value) in args.into_iter().enumerate() {
+            locals[slot] = Some(value);
+        }
+        LinearState {
+            function,
+            block,
+            instr: 0,
+            locals,
+            captures,
+            functions,
+        }
+    }
+
+    fn take_locals(&mut self, slots: usize) -> Vec<Option<Value>> {
+        if let Some(mut locals) = self.locals_pool.pop() {
+            locals.resize(slots, None);
+            locals
+        } else {
+            vec![None; slots]
+        }
+    }
+
+    /// 回收状态持有的槽位缓冲; 入池前已清空, 池中缓冲不含存活值.
+    fn recycle_locals(&mut self, state: &mut LinearState) {
+        let mut locals = std::mem::take(&mut state.locals);
+        locals.clear();
+        if self.locals_pool.len() < LOCALS_POOL_CAP {
+            self.locals_pool.push(locals);
+        }
+    }
+
     pub(super) fn run_linear(
         &mut self,
         mut state: LinearState,
@@ -80,11 +90,122 @@ impl Machine {
                 continue;
             }
             *budget -= 1;
-            self.step_term(&block.term, &mut state, gc)?;
-            return Ok(false);
+            // 同函数块切换原地复用槽位缓冲, 不经控制状态往返.
+            match &block.term {
+                Terminator::Jump { target, args } => {
+                    let args = eval_values(args, &state, gc)?;
+                    Self::switch_block(&function, &mut state, *target, args);
+                },
+                Terminator::If { cond, then, els } => {
+                    let cond = eval_operand(cond, &state, gc)?;
+                    let Value::Bool(cond) = cond else {
+                        return Err(Error::internal("条件不是布尔值"));
+                    };
+                    let target = if cond { then } else { els };
+                    let args = eval_values(&target.args, &state, gc)?;
+                    Self::switch_block(&function, &mut state, target.block, args);
+                },
+                Terminator::Match { value, arms } => {
+                    let value = eval_operand(value, &state, gc)?;
+                    let mut found = None;
+                    for arm in arms {
+                        if let Some(bound) = match_linear(&arm.pattern, &value) {
+                            found = Some((arm, bound));
+                            break;
+                        }
+                    }
+                    let Some((arm, mut bound)) = found else {
+                        return Err(Error::internal("模式匹配没有命中分支"));
+                    };
+                    for arg in &arm.live {
+                        bound.push(eval_operand(arg, &state, gc)?);
+                    }
+                    Self::switch_block(&function, &mut state, arm.target, bound);
+                },
+                // 被调静态已知为内置纯函数时直接完成调用: 不建续延帧,
+                // 结果直接送入目标块; I/O 内置与其余被调走常规路径.
+                Terminator::Call {
+                    callee,
+                    args,
+                    target,
+                    live,
+                    span,
+                } => {
+                    if let Some(pure) = Self::pure_builtin(callee) {
+                        let args = eval_values(args, &state, gc)?;
+                        let value = pure(&self.args, &args, Some(*span))?;
+                        let mut bound = Vec::with_capacity(live.len() + 1);
+                        bound.push(value);
+                        bound.extend(eval_values(live, &state, gc)?);
+                        Self::switch_block(&function, &mut state, *target, bound);
+                    } else {
+                        self.step_term(&block.term, &mut state, gc)?;
+                        return Ok(false);
+                    }
+                },
+                Terminator::TailCall { callee, args, span } => {
+                    if let Some(pure) = Self::pure_builtin(callee) {
+                        let args = eval_values(args, &state, gc)?;
+                        let value = pure(&self.args, &args, Some(*span))?;
+                        self.recycle_locals(&mut state);
+                        self.control = Control::Return(value);
+                        return Ok(false);
+                    }
+                    self.step_term(&block.term, &mut state, gc)?;
+                    return Ok(false);
+                },
+                _ => {
+                    self.step_term(&block.term, &mut state, gc)?;
+                    return Ok(false);
+                },
+            }
         }
     }
 
+    /// 被调为内置纯函数时返回其函数指针; I/O 内置与其余被调返回 None.
+    fn pure_builtin(callee: &Operand) -> Option<builtin::BuiltinFn> {
+        let Operand::Builtin(id) = callee else {
+            return None;
+        };
+        match builtin::resolve(*id) {
+            Some(builtin::Builtin::Pure(pure)) => Some(pure),
+            _ => None,
+        }
+    }
+
+    /// 同函数基本块切换: 参数求值完毕后原地重置槽位与指令下标.
+    fn switch_block(
+        function: &Arc<LinearFunction>,
+        state: &mut LinearState,
+        target: BlockId,
+        args: Vec<Value>,
+    ) {
+        let block = &function.blocks[target.index() as usize];
+        debug_assert_eq!(args.len(), block.param_count, "基本块参数个数不符");
+        state.locals.clear();
+        state.locals.resize(block.slots.len(), None);
+        for (slot, value) in args.into_iter().enumerate() {
+            state.locals[slot] = Some(value);
+        }
+        state.block = target;
+        state.instr = 0;
+    }
+}
+
+/// 由全局环境取主函数捕获值; 缺失的绑定留空, 首次读取时报错.
+pub(super) fn capture_values(globals: &Env, names: &[Symbol]) -> Arc<[Capture]> {
+    names
+        .iter()
+        .map(|name| {
+            globals
+                .get(name)
+                .cloned()
+                .map_or(Capture::Missing(*name), Capture::Value)
+        })
+        .collect()
+}
+
+impl Machine {
     fn step_instr(
         &mut self,
         instr: &Instr,
@@ -156,7 +277,7 @@ impl Machine {
         Ok(())
     }
 
-    // 终止指令分派; 分支与 Terminator 定义对应.
+    // 终止指令分派; 同函数块切换已在 run_linear 内联处理.
     #[allow(clippy::too_many_lines)]
     fn step_term(
         &mut self,
@@ -167,25 +288,13 @@ impl Machine {
         match term {
             Terminator::Return { value } => {
                 let value = eval_operand(value, state, gc)?;
-                state.locals.clear();
+                self.recycle_locals(state);
                 self.control = Control::Return(value);
-            },
-            Terminator::Jump { target, args } => {
-                let args = eval_values(args, state, gc)?;
-                state.locals.clear();
-                let state = enter_block(
-                    Arc::clone(&state.function),
-                    *target,
-                    args,
-                    Arc::clone(&state.captures),
-                    Arc::clone(&state.functions),
-                );
-                self.control = Control::Run(state);
             },
             Terminator::TailCall { callee, args, span } => {
                 let callee = eval_operand(callee, state, gc)?;
                 let args = eval_values(args, state, gc)?;
-                state.locals.clear();
+                self.recycle_locals(state);
                 self.apply_value(callee, args, Some(*span))?;
             },
             Terminator::Call {
@@ -199,7 +308,7 @@ impl Machine {
                 let args = eval_values(args, state, gc)?;
                 let live = eval_values(live, state, gc)?;
                 self.push_linear_frame(state, *target, live);
-                state.locals.clear();
+                self.recycle_locals(state);
                 self.apply_value(callee, args, Some(*span))?;
             },
             Terminator::Prim {
@@ -215,7 +324,7 @@ impl Machine {
                 let args = eval_values(args, state, gc)?;
                 let live = eval_values(live, state, gc)?;
                 self.push_linear_frame(state, *target, live);
-                state.locals.clear();
+                self.recycle_locals(state);
                 self.run_prim(*op, args, arg_types, ty, *span)?;
             },
             Terminator::Receive {
@@ -228,50 +337,8 @@ impl Machine {
                 let timeout = eval_operand(timeout, state, gc)?;
                 let live = eval_values(live, state, gc)?;
                 self.push_linear_frame(state, *target, live);
-                state.locals.clear();
+                self.recycle_locals(state);
                 self.receive(*index, &timeout, *span)?;
-            },
-            Terminator::If { cond, then, els } => {
-                let cond = eval_operand(cond, state, gc)?;
-                let Value::Bool(cond) = cond else {
-                    return Err(Error::internal("条件不是布尔值"));
-                };
-                let target = if cond { then } else { els };
-                let args = eval_values(&target.args, state, gc)?;
-                state.locals.clear();
-                let state = enter_block(
-                    Arc::clone(&state.function),
-                    target.block,
-                    args,
-                    Arc::clone(&state.captures),
-                    Arc::clone(&state.functions),
-                );
-                self.control = Control::Run(state);
-            },
-            Terminator::Match { value, arms } => {
-                let value = eval_operand(value, state, gc)?;
-                let mut found = None;
-                for arm in arms {
-                    if let Some(bound) = match_linear(&arm.pattern, &value) {
-                        found = Some((arm, bound));
-                        break;
-                    }
-                }
-                let Some((arm, mut bound)) = found else {
-                    return Err(Error::internal("模式匹配没有命中分支"));
-                };
-                for arg in &arm.live {
-                    bound.push(eval_operand(arg, state, gc)?);
-                }
-                state.locals.clear();
-                let state = enter_block(
-                    Arc::clone(&state.function),
-                    arm.target,
-                    bound,
-                    Arc::clone(&state.captures),
-                    Arc::clone(&state.functions),
-                );
-                self.control = Control::Run(state);
             },
             Terminator::Continue { args } => {
                 let Some((base, handler, pid)) = self.actor.as_ref().map(|actor| {
@@ -282,20 +349,20 @@ impl Machine {
                 let mut call_args = Vec::with_capacity(args.len() + 1);
                 call_args.push(Value::Pid(pid));
                 call_args.extend(eval_values(args, state, gc)?);
-                state.locals.clear();
+                self.recycle_locals(state);
                 self.kont.truncate(base);
                 self.apply_value(handler, call_args, None)?;
             },
             Terminator::Exit { value } => {
                 let value = eval_operand(value, state, gc)?;
-                state.locals.clear();
+                self.recycle_locals(state);
                 let Value::U8(code) = value else {
                     return Err(Error::internal("退出码不是 u8"));
                 };
                 return Err(Error::Exit(code));
             },
             Terminator::Halt => {
-                state.locals.clear();
+                self.recycle_locals(state);
                 self.control = Control::ActorExit(ExitReason::Halted);
             },
             Terminator::Fail {
@@ -304,12 +371,15 @@ impl Machine {
                 span,
             } => {
                 let message = eval_operand(message, state, gc)?;
-                state.locals.clear();
+                self.recycle_locals(state);
                 let Value::Str(text) = message else {
                     return Err(Error::internal("失败信息不是字符串"));
                 };
                 let kind = crate::error::ErrorKind::from_fail(*kind, text.to_string());
                 return Err(Error::runtime(kind, Some(*span)));
+            },
+            Terminator::Jump { .. } | Terminator::If { .. } | Terminator::Match { .. } => {
+                unreachable!("同函数块切换已在 run_linear 内联处理");
             },
         }
         Ok(())
@@ -331,10 +401,11 @@ fn eval_values(
     state: &LinearState,
     gc: &GcRegistry,
 ) -> Result<Vec<Value>, Error> {
-    operands
-        .iter()
-        .map(|operand| eval_operand(operand, state, gc))
-        .collect()
+    let mut values = Vec::with_capacity(operands.len());
+    for operand in operands {
+        values.push(eval_operand(operand, state, gc)?);
+    }
+    Ok(values)
 }
 
 fn eval_captures(

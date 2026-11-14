@@ -84,14 +84,14 @@
         {match: keywordsToRegex(
             // BEGIN operations
             "DictEntries DictFilter DictFromEntries DictGet DictHas DictKeys DictLength DictLookup"
-            "DictMerge DictPut DictRemove DictUpdate DictValues Fst IsErr IsNone"
-            "IsOk IsSome ListAll ListAny ListAppend ListChunk ListConcatenate ListDrop"
-            "ListDropWhile ListFilter ListFlatten ListFold ListGet ListHead ListLength ListMap"
-            "ListMapIndexed ListPrefixFold ListPrepend ListRepeat ListReverse ListRiffle ListTail ListTake"
-            "ListTakeWhile ListUpdate ListWindow ListZip ListZipWith OptionAndThen OptionGet OptionMap"
-            "Register ResultAndThen ResultGet ResultMap SetDifference SetFilter SetFromList SetHas"
-            "SetInsert SetIntersect SetItems SetLength SetRemove SetUnion Snd Unregister"
-            "WhereIs"
+            "DictMerge DictPut DictRemove DictUpdate DictValues Fst IsDictEmpty IsErr"
+            "IsListEmpty IsNone IsOk IsSetEmpty IsSome ListAll ListAny ListAppend"
+            "ListChunk ListConcatenate ListDrop ListDropWhile ListFilter ListFlatten ListFold ListGet"
+            "ListHead ListLength ListMap ListMapIndexed ListPrefixFold ListPrepend ListRepeat ListReverse"
+            "ListRiffle ListTail ListTake ListTakeWhile ListUpdate ListWindow ListZip ListZipWith"
+            "OptionAndThen OptionGet OptionMap Register ResultAndThen ResultGet ResultMap SetDifference"
+            "SetFilter SetFromList SetHas SetInsert SetIntersect SetItems SetLength SetRemove"
+            "SetUnion Snd Unregister WhereIs"
             // END operations
         ), 0: "keyword2"}
 
@@ -117,14 +117,14 @@
             "PrintError PrintRaw QuotientI64 ReadChunk ReadFile ReadFileBytes ReadKey ReadLine"
             "ReadLineFrom ReadLinePlain RemainderI64 RemoveDirectory RemoveFile RenamePath Round ShiftLeftI64"
             "ShiftLeftU64 ShiftLeftU8 ShiftRightI64 ShiftRightU64 ShiftRightU8 Sin Sinh SocketClose"
-            "SocketPeer SocketRead SocketReadAll SocketReadExact SocketReadLine SocketWrite SocketWriteAll SocketWriteLine"
-            "Sqrt StringContains StringEndsWith StringJoin StringLength StringLines StringLowercase StringSplit"
-            "StringStartsWith StringToChars StringTrim StringTrimEnd StringTrimStart StringUppercase StringWords SubDay"
-            "SubF64 SubHour SubI64 SubMillisecond SubMinute SubMonth SubSecond SubU64"
-            "SubU8 SubWeek SubYear Tan Tanh TcpAccept TcpCloseListener TcpConnect"
-            "TcpListen TcpLocalPort TimeHour TimeMillisecond TimeMinute TimeSecond TimeZoneName TimeZoneOffsetMinutes"
-            "Truncate U64ToChar U64ToF64 U64ToI64 U64ToU8 U8ToI64 U8ToU64 WriteBytes"
-            "WriteFile WriteFileBytes WriteString"
+            "SocketIsClosed SocketPeer SocketRead SocketReadAll SocketReadExact SocketReadLine SocketShutdownWrite SocketWrite"
+            "SocketWriteAll SocketWriteLine Sqrt StringContains StringEndsWith StringJoin StringLength StringLines"
+            "StringLowercase StringSplit StringStartsWith StringToChars StringTrim StringTrimEnd StringTrimStart StringUppercase"
+            "StringWords SubDay SubF64 SubHour SubI64 SubMillisecond SubMinute SubMonth"
+            "SubSecond SubU64 SubU8 SubWeek SubYear Tan Tanh TcpAccept"
+            "TcpCloseListener TcpConnect TcpListen TcpLocalPort TimeHour TimeMillisecond TimeMinute TimeSecond"
+            "TimeZoneName TimeZoneOffsetMinutes Truncate U64ToChar U64ToF64 U64ToI64 U64ToU8 U8ToI64"
+            "U8ToU64 WriteBytes WriteFile WriteFileBytes WriteString"
             // END builtins
         ), 0: "label"}
 

@@ -256,7 +256,7 @@ pub enum Cps {
     Continue { args: Vec<Value> },
     /// 顶层退出.
     Exit(Value),
-    /// Handler 主动停止.
+    /// Handler 主动停机.
     Halt,
     /// 用户主动中断: 断言失败, 主动中止, 尚未实现或不该到达的分支.
     ///

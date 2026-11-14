@@ -59,6 +59,10 @@ pub(crate) enum NetTask {
         all: bool,
         timeout: Duration,
     },
+    /// 关闭写侧, 对端读到 EOF; 读侧保持打开.
+    ShutdownWrite {
+        socket: Arc<SocketHandle>,
+    },
 }
 
 /// 提交网络任务; 由 `super::submit_task` 调用.
@@ -191,6 +195,22 @@ pub(crate) fn socket_close_task(args: &[Value], _: Option<Span>) -> Result<Task,
     let socket = socket_arg(args, 0)?;
     socket.close();
     Ok(Task::Ready(Value::Nil))
+}
+
+pub(crate) fn socket_is_closed_task(args: &[Value], _: Option<Span>) -> Result<Task, Error> {
+    let socket = socket_arg(args, 0)?;
+    Ok(Task::Ready(Value::Bool(socket.is_closed())))
+}
+
+pub(crate) fn socket_shutdown_write_task(
+    args: &[Value],
+    _: Option<Span>,
+) -> Result<Task, Error> {
+    let socket = socket_arg(args, 0)?;
+    if socket.is_closed() {
+        return Ok(closed());
+    }
+    Ok(Task::Network(NetTask::ShutdownWrite { socket }))
 }
 
 pub(crate) fn socket_read_task(args: &[Value], _: Option<Span>) -> Result<Task, Error> {

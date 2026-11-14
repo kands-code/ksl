@@ -146,8 +146,12 @@ struct ListLoop {
     op: ListOpKind,
     function: Value,
     list: crate::value::List,
+    /// 第一个输入列表的当前下标.
+    pos: usize,
     /// `ZipWith` 的第二个输入列表; 其余操作为 None.
     second: Option<crate::value::List>,
+    /// `ZipWith` 第二个输入列表的当前下标.
+    pos2: usize,
     current: Option<Value>,
     /// `ZipWith` 的第二个当前元素.
     current2: Option<Value>,
@@ -209,6 +213,8 @@ pub struct Machine {
     actor: Option<ActorRuntime>,
     scheduler: Option<SchedulerHandle>,
     gc: Arc<GcRegistry>,
+    /// 槽位缓冲池: 基本块切换时回收复用, 避免每次进入块都重新分配.
+    locals_pool: Vec<Vec<Option<Value>>>,
 }
 
 impl Default for Machine {
@@ -228,6 +234,7 @@ impl Machine {
             actor: None,
             scheduler: None,
             gc: Arc::new(GcRegistry::new()),
+            locals_pool: Vec::new(),
         }
     }
 
@@ -300,13 +307,8 @@ impl Machine {
         let (functions, main) = linear.into_parts();
         let captures = linear::capture_values(&self.globals, &main.free_vars);
         let entry = main.entry;
-        self.control = Control::Run(linear::enter_block(
-            main,
-            entry,
-            Vec::new(),
-            captures,
-            functions,
-        ));
+        self.control =
+            Control::Run(self.enter_block(main, entry, Vec::new(), captures, functions));
     }
 
     /// 按指令预算推进; 预算耗尽时保留控制状态供下次继续.
@@ -360,7 +362,7 @@ impl Machine {
                 let mut live = Vec::with_capacity(frame.live.len() + 1);
                 live.push(value);
                 live.extend(frame.live);
-                self.control = Control::Run(linear::enter_block(
+                self.control = Control::Run(self.enter_block(
                     frame.function,
                     frame.target,
                     live,
@@ -418,7 +420,7 @@ impl Machine {
                 if args.len() != closure.params.len() {
                     return Err(Error::internal("实参个数不符"));
                 }
-                let state = linear::enter_block(
+                let state = self.enter_block(
                     Arc::clone(&closure.function),
                     closure.function.entry,
                     args,

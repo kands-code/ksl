@@ -88,6 +88,10 @@ impl Machine {
                             .map_err(|_| Error::internal("字典长度超出 u64 上限"))?,
                     )
                 },
+                DictOpKind::IsEmpty => {
+                    let map = dict_arg(args, 0)?;
+                    Value::Bool(map.is_empty())
+                },
                 DictOpKind::Entries => {
                     let map = dict_arg(args, 0)?;
                     list(map.iter().map(|(key, value)| {
@@ -167,6 +171,10 @@ impl Machine {
                     u64::try_from(set.len())
                         .map_err(|_| Error::internal("集合长度超出 u64 上限"))?,
                 )
+            },
+            SetOpKind::IsEmpty => {
+                let set = set_arg(args, 0)?;
+                Value::Bool(set.is_empty())
             },
             SetOpKind::Items => {
                 let set = set_arg(args, 0)?;

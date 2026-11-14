@@ -15,7 +15,8 @@ const LIST_OPS = [
   'ListGet', 'ListUpdate', 'ListPrepend', 'ListAppend', 'ListConcatenate',
   'ListHead', 'ListTail', 'ListTake', 'ListDrop', 'ListTakeWhile',
   'ListDropWhile', 'ListMap', 'ListMapIndexed', 'ListFilter', 'ListFold',
-  'ListPrefixFold', 'ListAny', 'ListAll', 'ListLength', 'ListReverse',
+  'ListPrefixFold', 'ListAny', 'ListAll', 'ListLength', 'IsListEmpty',
+  'ListReverse',
   'ListRepeat', 'ListFlatten', 'ListChunk', 'ListRiffle', 'ListWindow',
   'ListZip', 'ListZipWith',
 ];
@@ -26,13 +27,15 @@ const PAIR_OPS = ['Fst', 'Snd'];
 /// Dict 操作族.
 const DICT_OPS = [
   'DictLookup', 'DictGet', 'DictPut', 'DictUpdate', 'DictRemove', 'DictHas',
-  'DictLength', 'DictEntries', 'DictKeys', 'DictValues', 'DictMerge',
+  'DictLength', 'IsDictEmpty', 'DictEntries', 'DictKeys', 'DictValues',
+  'DictMerge',
   'DictFilter', 'DictFromEntries',
 ];
 
 /// Set 操作族.
 const SET_OPS = [
-  'SetInsert', 'SetRemove', 'SetHas', 'SetLength', 'SetItems', 'SetUnion',
+  'SetInsert', 'SetRemove', 'SetHas', 'SetLength', 'IsSetEmpty', 'SetItems',
+  'SetUnion',
   'SetIntersect', 'SetDifference', 'SetFilter', 'SetFromList',
 ];
 

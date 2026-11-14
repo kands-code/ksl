@@ -195,9 +195,9 @@ fn handle_command(ctx: &mut EvalContext<'_>, text: &str) -> CommandOutcome {
 fn print_command_help() {
     outln!("REPL 命令:");
     outln!("  %help              显示本帮助");
-    outln!("  %type <表达式>     只做类型检查, 不执行也不提交绑定");
+    outln!("  %type <表达式>     检查表达式类型");
     outln!("  %bindings          列出当前全局绑定");
-    outln!("  %reset             清空全局绑定, 类型环境, 模块缓存与 Actor");
+    outln!("  %reset             清空会话状态");
     outln!("  %quit              退出 REPL");
 }
 

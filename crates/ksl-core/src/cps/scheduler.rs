@@ -134,7 +134,8 @@ impl Scheduler {
         self.extra_roots.pop();
     }
 
-    /// 设置自动收集阈值; 0 表示关闭自动收集.
+    /// 设置自动收集阈值下限; 实际触发阈值随存活候选规模自适应上调.
+    /// 0 表示关闭自动收集.
     pub fn set_gc_threshold(&mut self, threshold: usize) {
         self.gc_threshold.store(threshold, Ordering::Relaxed);
     }
@@ -154,7 +155,13 @@ impl Scheduler {
 
     fn should_collect(&self) -> bool {
         let threshold = self.gc_threshold.load(Ordering::Relaxed);
-        threshold > 0 && self.gc.allocations_since_collection() >= threshold
+        if threshold == 0 {
+            return false;
+        }
+        // 阈值随存活候选规模上调: 标记成本正比于存活对象总数,
+        // 按存活数比例触发可把每个新候选分摊的标记成本钉在常数.
+        let adaptive = (self.gc.live_candidates() / 4).max(threshold);
+        self.gc.allocations_since_collection() >= adaptive
     }
 
     /// 新候选对象达到阈值时收集一次; 只在调度器循环的安全点调用.
@@ -275,7 +282,7 @@ impl Scheduler {
         mailboxes: usize,
         args: Vec<Value>,
     ) -> Result<Value, Error> {
-        let Value::Pid(_) = self.handle.spawn_root(mailboxes, handler, args) else {
+        let Value::Pid(_) = self.shard.spawn_root(mailboxes, handler, args) else {
             return Err(Error::internal("Main 的启动结果不是 Pid"));
         };
         self.main_wait = None;
@@ -316,7 +323,7 @@ impl Scheduler {
             if let Some(result) = self.main_result.take() {
                 return result;
             }
-            if let Some(result) = self.handle.take_root_result() {
+            if let Some(result) = self.shard.take_root_result() {
                 return result;
             }
             self.maybe_collect_cycles();
@@ -340,13 +347,14 @@ impl Scheduler {
     }
 
     fn drain_prelude_io(&mut self) {
+        // Prelude 没有等待中的 I/O 时不会有新的完成送达, 整段跳过避免取锁.
+        let Some(Wait::Io { op_id }) = self.main_wait.as_ref() else {
+            return;
+        };
         let results = self.handle.take_prelude_io();
         if results.is_empty() {
             return;
         }
-        let Some(Wait::Io { op_id }) = self.main_wait.as_ref() else {
-            return;
-        };
         let op_id = *op_id;
         for (id, result) in results {
             if id != op_id {

@@ -70,7 +70,7 @@ impl Machine {
         }
         let mut args = PrimArgs::new(args, span);
         let value = match op {
-            K::Get | K::Head => Self::list_access(op, &mut args)?,
+            K::Get | K::Head | K::IsEmpty => Self::list_access(op, &mut args)?,
             K::Update
             | K::Prepend
             | K::Append
@@ -103,7 +103,7 @@ impl Machine {
         Ok(())
     }
 
-    /// 不改变列表形态的访问: 索引, 头部与配对分量.
+    /// 不改变列表形态的访问与判定: 索引, 头部与空判定.
     fn list_access(op: ListOpKind, args: &mut PrimArgs) -> Result<Value, Error> {
         use ListOpKind as K;
         let span = args.span;
@@ -118,6 +118,7 @@ impl Machine {
                 .list()?
                 .front_value()
                 .ok_or_else(|| Error::runtime(ErrorKind::EmptyListHead, Some(span)))?,
+            K::IsEmpty => Value::Bool(args.list()?.is_empty()),
             _ => unreachable!("list_access 只接收访问类操作"),
         })
     }
@@ -207,6 +208,7 @@ impl Machine {
                         .map_err(|_| Error::internal("列表长度超出 u64 上限"))?,
                 )
             },
+            K::IsEmpty => unreachable!("空判定在 list_access 处理"),
             K::Riffle => {
                 let list = list_owned(args.list()?);
                 let elem = args.next()?;
@@ -289,7 +291,9 @@ impl Machine {
             op,
             function,
             list,
+            pos: 0,
             second,
+            pos2: 0,
             current: None,
             current2: None,
             index: 0,
@@ -300,25 +304,27 @@ impl Machine {
     }
 
     fn advance_list_loop(&mut self, mut frame: ListLoop) -> Result<(), Error> {
+        // 下标游标逐元素推进, 不做逐元素的 skip; 列表整体留在帧中供环回收追踪.
         let item = if frame.op == ListOpKind::ZipWith {
-            let Some(first) = frame.list.front_value() else {
+            let Some(first) = frame.list.get_value(frame.pos) else {
                 return self.finish_list_loop(frame);
             };
-            let Some(second) = frame.second.as_ref().and_then(crate::value::List::front_value)
+            let Some(second) = frame
+                .second
+                .as_ref()
+                .and_then(|list| list.get_value(frame.pos2))
             else {
                 return self.finish_list_loop(frame);
             };
-            frame.list = frame.list.skip(1);
-            if let Some(list) = frame.second.as_mut() {
-                *list = list.skip(1);
-            }
+            frame.pos += 1;
+            frame.pos2 += 1;
             frame.current2 = Some(second.clone());
             (first, Some(second))
         } else {
-            let Some(item) = frame.list.front_value() else {
+            let Some(item) = frame.list.get_value(frame.pos) else {
                 return self.finish_list_loop(frame);
             };
-            frame.list = frame.list.skip(1);
+            frame.pos += 1;
             (item, None)
         };
         let args = match frame.op {
@@ -403,7 +409,7 @@ impl Machine {
                 if drop {
                     self.advance_list_loop(frame)
                 } else {
-                    let mut result = frame.list;
+                    let mut result = frame.list.skip(frame.pos);
                     result.push_front(
                         current.ok_or_else(|| Error::internal("循环缺少当前元素"))?,
                     );

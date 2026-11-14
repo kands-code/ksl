@@ -210,6 +210,11 @@ impl List {
     }
 
     #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[must_use]
     pub(crate) fn get_value(&self, index: usize) -> Option<Value> {
         match self {
             Self::I64(items) => items.get(index).copied().map(Value::I64),

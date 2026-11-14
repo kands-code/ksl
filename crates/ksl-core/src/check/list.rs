@@ -127,6 +127,11 @@ impl Checker {
                 self.check_expr_expect(&args[0], Some(&InferTy::list(elem)))?;
                 Ok(InferTy::U64)
             },
+            K::IsEmpty => {
+                let elem = self.infer.fresh(span, "列表元素");
+                self.check_expr_expect(&args[0], Some(&InferTy::list(elem)))?;
+                Ok(InferTy::Bool)
+            },
             K::Flatten => {
                 let elem = self.list_elem(expected, span, "Flatten 元素");
                 let list = InferTy::list(elem.clone());

@@ -2105,6 +2105,10 @@
             },
             {
               "type": "STRING",
+              "value": "IsListEmpty"
+            },
+            {
+              "type": "STRING",
               "value": "ListReverse"
             },
             {
@@ -2391,6 +2395,10 @@
             },
             {
               "type": "STRING",
+              "value": "IsDictEmpty"
+            },
+            {
+              "type": "STRING",
               "value": "DictEntries"
             },
             {
@@ -2483,6 +2491,10 @@
             {
               "type": "STRING",
               "value": "SetLength"
+            },
+            {
+              "type": "STRING",
+              "value": "IsSetEmpty"
             },
             {
               "type": "STRING",

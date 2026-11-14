@@ -26,7 +26,7 @@ static PARSER: DateTimeParser = DateTimeParser::new();
 fn date_time<'a>(args: &'a [Value], index: usize, what: &str) -> Result<&'a Zoned, Error> {
     match args.get(index) {
         Some(Value::DateTime(value)) => Ok(value),
-        _ => Err(Error::internal(format!("{what}不是 DateTime"))),
+        _ => Err(Error::internal(format!("{what} 不是 DateTime"))),
     }
 }
 
@@ -34,7 +34,7 @@ fn date_time<'a>(args: &'a [Value], index: usize, what: &str) -> Result<&'a Zone
 fn int_arg(args: &[Value], index: usize, what: &str) -> Result<i64, Error> {
     match args.get(index) {
         Some(Value::I64(value)) => Ok(*value),
-        _ => Err(Error::internal(format!("{what}不是 i64"))),
+        _ => Err(Error::internal(format!("{what} 不是 i64"))),
     }
 }
 
@@ -42,7 +42,7 @@ fn int_arg(args: &[Value], index: usize, what: &str) -> Result<i64, Error> {
 fn u64_arg(args: &[Value], index: usize, what: &str) -> Result<u64, Error> {
     match args.get(index) {
         Some(Value::U64(value)) => Ok(*value),
-        _ => Err(Error::internal(format!("{what}不是 u64"))),
+        _ => Err(Error::internal(format!("{what} 不是 u64"))),
     }
 }
 
@@ -50,7 +50,7 @@ fn u64_arg(args: &[Value], index: usize, what: &str) -> Result<u64, Error> {
 fn string_arg<'a>(args: &'a [Value], index: usize, what: &str) -> Result<&'a Arc<str>, Error> {
     match args.get(index) {
         Some(Value::Str(text)) => Ok(text),
-        _ => Err(Error::internal(format!("{what}不是字符串"))),
+        _ => Err(Error::internal(format!("{what} 不是字符串"))),
     }
 }
 
